@@ -11,14 +11,13 @@ const fontSans = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  // 1. TAMBAHKAN INI (Ganti link sesuai Vercel kamu)
+  // Domain Utama
   metadataBase: new URL("https://angkringan-digital.vercel.app"),
 
   title: "Angkringan Mas Radit | Pesan Online",
   description: "SaaS Angkringan Modern untuk UMKM",
 
-  // 2. PASTI KAN INI SESUAI NAMA FILE DI FOLDER PUBLIC (manifest.json)
-  manifest: "/manifest.json",
+  // ❌ BARIS MANIFEST LAMA SUDAH DIHAPUS (Biar Next.js yang handle otomatis)
 
   icons: {
     icon: "/favicon.ico",
@@ -30,7 +29,7 @@ export const metadata: Metadata = {
     siteName: "Angkringan Mas Radit",
     images: [
       {
-        url: "/thumbnail.jpg", // Pastikan ada file thumbnail.jpg di public
+        url: "/thumbnail.jpg",
         width: 1200,
         height: 630,
         alt: "Angkringan Mas Radit Preview",

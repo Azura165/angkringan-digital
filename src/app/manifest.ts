@@ -3,17 +3,22 @@ import { MetadataRoute } from "next";
 export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "Angkringan Mas Radit",
-    short_name: "Angkringan",
-    description: "SaaS Angkringan Modern",
+    short_name: "Mas Radit",
+    description: "Aplikasi pesan makan Angkringan modern.",
     start_url: "/",
-    display: "standalone", // INI KUNCINYA: Hilangkan UI Browser
-    background_color: "#09090b", // Zinc-950
+    display: "standalone",
+    background_color: "#09090b",
     theme_color: "#09090b",
     icons: [
       {
-        src: "/favicon.ico",
-        sizes: "any",
-        type: "image/x-icon",
+        src: "/icons/icon-192.png",
+        sizes: "192x192",
+        type: "image/png",
+      },
+      {
+        src: "/icons/icon-512.png",
+        sizes: "512x512",
+        type: "image/png",
       },
     ],
   };
