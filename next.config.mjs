@@ -1,15 +1,27 @@
-import withPWAInit from "@ducanh2912/next-pwa"; // <--- Pastikan pakai @ducanh2912
+import withPWAInit from "@ducanh2912/next-pwa";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  turbopack: {}, // <--- INI OBAT ERROR TURBOPACK YANG TADI
+  turbopack: {},
+  // TAMBAHAN BARU: Izin Gambar Eksternal
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "images.unsplash.com",
+      },
+      {
+        protocol: "https",
+        hostname: "**.supabase.co", // Ganti bintang dengan domain supabase kamu jika perlu, atau biarkan wildcard
+      },
+    ],
+  },
 };
 
 const withPWA = withPWAInit({
   dest: "public",
-  disable: process.env.NODE_ENV === "development", // PWA mati di mode dev biar enteng
-  // Settingan tambahan biar icon maskable aman
+  disable: process.env.NODE_ENV === "development",
   workboxOptions: {
     disableDevLogs: true,
   },
