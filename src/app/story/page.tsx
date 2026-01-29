@@ -37,6 +37,9 @@ interface StoreData {
   whatsapp_number: string;
 }
 
+// Cache Key (Kunci Memori)
+const CACHE_KEY_STORY = "story_data_cache_v1";
+
 // --- KOMPONEN KECIL ---
 const ReviewCard = ({ review }: { review: any }) => (
   <div className="min-w-[240px] bg-zinc-900 border border-white/5 p-4 rounded-xl snap-center flex flex-col justify-between h-32">
@@ -61,7 +64,6 @@ const ReviewCard = ({ review }: { review: any }) => (
   </div>
 );
 
-// Helper Icon Map untuk Milestones
 const IconMap = ({ name, size = 20 }: { name: string; size?: number }) => {
   switch (name) {
     case "Flag":
@@ -86,16 +88,33 @@ export default function StoryPage() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState(false);
 
-  // FETCH DATA
+  // FETCH DATA DENGAN CACHE
   useEffect(() => {
     async function init() {
-      setIsLoading(true);
+      // 1. CEK CACHE DULU (Instant Load)
+      const cachedData = sessionStorage.getItem(CACHE_KEY_STORY);
+      if (cachedData) {
+        try {
+          const parsed = JSON.parse(cachedData);
+          setStoreData(parsed.storeData);
+          setMilestones(parsed.milestones);
+          setGallery(parsed.gallery);
+          setReviews(parsed.reviews);
+          setIsLoading(false); // Langsung matikan loading jika cache ada
+        } catch (e) {
+          console.error("Cache error", e);
+        }
+      } else {
+        // Hanya set loading true jika TIDAK ada cache
+        setIsLoading(true);
+      }
+
       try {
+        // 2. FETCH DATA BARU (Background Update)
         const [config, mile, gal, rev] = await Promise.all([
           supabase.from("store_config").select("*").single(),
           supabase.from("milestones").select("*").order("id"),
           supabase.from("gallery").select("*").limit(6),
-          // Ambil review bintang 4 ke atas saja untuk ditampilkan di depan
           supabase
             .from("reviews")
             .select("*")
@@ -123,6 +142,15 @@ export default function StoryPage() {
         if (mile.data) setMilestones(mile.data);
         if (gal.data) setGallery(gal.data);
         if (rev.data) setReviews(rev.data);
+
+        // 3. SIMPAN KE CACHE
+        const newData = {
+          storeData: config.data,
+          milestones: mile.data || [],
+          gallery: gal.data || [],
+          reviews: rev.data || [],
+        };
+        sessionStorage.setItem(CACHE_KEY_STORY, JSON.stringify(newData));
       } catch (err) {
         console.error("Error fetching story data:", err);
       } finally {
@@ -144,11 +172,10 @@ export default function StoryPage() {
 
   return (
     <MobileLayout>
-      {/* HERO SECTION (Static Image - No Parallax) */}
+      {/* HERO SECTION */}
       <div className="relative h-[320px] w-full overflow-hidden bg-zinc-900">
-        {/* Gambar Diam (Statis) */}
         <div className="absolute inset-0 w-full h-full">
-          {isLoading ? (
+          {isLoading && !storeData ? ( // Hanya show skeleton jika data beneran kosong
             <Skeleton className="w-full h-full bg-zinc-800" />
           ) : (
             <Image
@@ -159,27 +186,26 @@ export default function StoryPage() {
               alt="Story Cover"
               fill
               className="object-cover"
-              priority
+              priority={true} // Prioritas Loading
             />
           )}
-          {/* Gradient Overlay */}
           <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/50 to-transparent" />
         </div>
 
         <div className="absolute bottom-0 left-0 p-6 w-full z-10 translate-y-0 transform">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-orange-500/90 backdrop-blur-md text-white text-[10px] font-bold uppercase tracking-widest rounded-full mb-3 shadow-lg animate-in slide-in-from-left-4 duration-700">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-orange-500/90 backdrop-blur-md text-white text-[10px] font-bold uppercase tracking-widest rounded-full mb-3 shadow-lg">
             <Flag size={10} fill="currentColor" /> Our Journey
           </span>
-          <h1 className="text-4xl font-black text-white leading-none mb-2 drop-shadow-2xl animate-in slide-in-from-bottom-4 duration-700">
+          <h1 className="text-4xl font-black text-white leading-none mb-2 drop-shadow-2xl">
             {storeData?.history_title || "Perjalanan Rasa"}
           </h1>
         </div>
       </div>
 
       <div className="px-5 py-8 space-y-10 bg-zinc-950 min-h-screen relative z-20 rounded-t-[2rem] -mt-6 border-t border-white/5 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
-        {/* MILESTONES (Stats dari DB) */}
+        {/* MILESTONES */}
         <section className="grid grid-cols-3 gap-3">
-          {isLoading
+          {isLoading && milestones.length === 0
             ? Array.from({ length: 3 }).map((_, i) => (
                 <Skeleton key={i} className="h-20 rounded-2xl bg-zinc-900" />
               ))
@@ -218,7 +244,7 @@ export default function StoryPage() {
             <h3 className="text-white font-bold text-lg">Galeri 📸</h3>
           </div>
           <div className="grid grid-cols-2 gap-2">
-            {isLoading
+            {isLoading && gallery.length === 0
               ? Array.from({ length: 4 }).map((_, i) => (
                   <Skeleton key={i} className="h-32 rounded-xl bg-zinc-900" />
                 ))
@@ -245,7 +271,7 @@ export default function StoryPage() {
           </div>
         </section>
 
-        {/* REVIEWS (Dari DB) */}
+        {/* REVIEWS */}
         {reviews.length > 0 && (
           <section className="overflow-hidden">
             <h3 className="text-white font-bold text-sm mb-4 px-1">
@@ -259,7 +285,7 @@ export default function StoryPage() {
           </section>
         )}
 
-        {/* LOCATION & CONTACT */}
+        {/* LOCATION */}
         <section className="space-y-4">
           <h3 className="text-white font-bold text-lg flex items-center gap-2">
             <MapPin className="text-orange-500" /> Lokasi
