@@ -6,25 +6,27 @@ export interface MenuItem {
   name: string;
   price: number;
   image: string;
+  category?: string;
 }
 
 export interface CartItem extends MenuItem {
   qty: number;
 }
 
-// TIPE DATA BARU UNTUK RIWAYAT
+// TIPE DATA HISTORY (DIPERBARUI)
 export interface OrderHistory {
   id: string;
   date: string;
   items: CartItem[];
   total: number;
   customerName: string;
-  tableNumber: string;
+  table: string; // Diganti dari tableNumber biar sinkron
+  isReviewed?: boolean; // Status review
 }
 
 interface CartStore {
   items: CartItem[];
-  history: OrderHistory[]; // <-- Data Riwayat
+  history: OrderHistory[];
   isConfirmed: boolean;
 
   addToCart: (product: MenuItem) => void;
@@ -33,8 +35,11 @@ interface CartStore {
   clearCart: () => void;
   setConfirmed: (status: boolean) => void;
 
-  moveToHistory: (name: string, table: string) => void; // <-- Fungsi Pindah ke History
+  // FITUR HISTORY LENGKAP
+  moveToHistory: (name: string, table: string) => void;
   clearHistory: () => void;
+  removeFromHistory: (id: string) => void; // Fitur Hapus Item
+  markAsReviewed: (id: string) => void; // Fitur Rating
 
   totalItems: () => number;
   totalPrice: () => number;
@@ -44,7 +49,7 @@ export const useCart = create<CartStore>()(
   persist(
     (set, get) => ({
       items: [],
-      history: [], // Awalnya kosong
+      history: [],
       isConfirmed: false,
 
       addToCart: (product) => {
@@ -94,7 +99,7 @@ export const useCart = create<CartStore>()(
       clearCart: () => set({ items: [], isConfirmed: false }),
       setConfirmed: (status) => set({ isConfirmed: status }),
 
-      // --- LOGIC PINDAH KE HISTORY (BARU) ---
+      // --- LOGIC HISTORY YANG DIPERBAIKI ---
       moveToHistory: (name, table) => {
         const currentItems = get().items;
         if (currentItems.length === 0) return;
@@ -105,7 +110,7 @@ export const useCart = create<CartStore>()(
         );
 
         const newOrder: OrderHistory = {
-          id: `ORD-${Date.now().toString().slice(-6)}`, // ID Unik pendek
+          id: `ORD-${Date.now().toString().slice(-6)}`,
           date: new Date().toLocaleString("id-ID", {
             day: "numeric",
             month: "short",
@@ -115,17 +120,34 @@ export const useCart = create<CartStore>()(
           items: [...currentItems],
           total: total,
           customerName: name,
-          tableNumber: table,
+          table: table, // Simpan ke variabel 'table'
+          isReviewed: false,
         };
 
         set((state) => ({
-          history: [newOrder, ...state.history], // Tambah ke paling atas (terbaru)
-          items: [], // Kosongkan keranjang
-          isConfirmed: false, // Reset status
+          history: [newOrder, ...state.history],
+          items: [],
+          isConfirmed: false,
         }));
       },
 
       clearHistory: () => set({ history: [] }),
+
+      // FUNGSI HAPUS SATUAN (SOLUSI GAGAL HAPUS)
+      removeFromHistory: (id) => {
+        set((state) => ({
+          history: state.history.filter((item) => item.id !== id),
+        }));
+      },
+
+      // FUNGSI TANDAI REVIEW
+      markAsReviewed: (id) => {
+        set((state) => ({
+          history: state.history.map((item) =>
+            item.id === id ? { ...item, isReviewed: true } : item,
+          ),
+        }));
+      },
 
       totalItems: () =>
         get().items.reduce((total, item) => total + item.qty, 0),

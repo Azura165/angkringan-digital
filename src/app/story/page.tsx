@@ -14,28 +14,20 @@ import {
   Quote,
   Copy,
   CheckCircle,
+  X,
+  Star,
+  Maximize2,
 } from "lucide-react";
 import Image from "next/image";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 
 // --- TIPE DATA ---
-interface Milestone {
-  id: number;
-  label: string;
-  value: string;
-  icon: string;
-}
-
-interface GalleryItem {
-  id: number;
-  image_url: string;
-  caption: string;
-}
-
 interface StoreData {
+  name: string;
   history_title: string;
   history_description: string;
   history_image_url: string;
@@ -43,166 +35,189 @@ interface StoreData {
   map_embed_url: string;
   instagram_url: string;
   whatsapp_number: string;
-  name?: string;
 }
 
-// Helper Icon Map
-const IconMap = ({
-  name,
-  size = 20,
-  className = "",
-}: {
-  name: string;
-  size?: number;
-  className?: string;
-}) => {
+// --- KOMPONEN KECIL ---
+const ReviewCard = ({ review }: { review: any }) => (
+  <div className="min-w-[240px] bg-zinc-900 border border-white/5 p-4 rounded-xl snap-center flex flex-col justify-between h-32">
+    <div>
+      <div className="flex gap-1 mb-2">
+        {[...Array(review.rating || 5)].map((_, i) => (
+          <Star key={i} size={12} className="fill-orange-500 text-orange-500" />
+        ))}
+      </div>
+      <p className="text-zinc-300 text-xs italic line-clamp-3 leading-relaxed">
+        "{review.comment}"
+      </p>
+    </div>
+    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-white/5">
+      <div className="w-6 h-6 bg-zinc-800 rounded-full flex items-center justify-center text-[10px] font-bold text-zinc-500 uppercase">
+        {review.name ? review.name.charAt(0) : "A"}
+      </div>
+      <span className="text-[10px] font-bold text-zinc-400 truncate">
+        {review.name || "Anonim"}
+      </span>
+    </div>
+  </div>
+);
+
+// Helper Icon Map untuk Milestones
+const IconMap = ({ name, size = 20 }: { name: string; size?: number }) => {
   switch (name) {
     case "Flag":
-      return <Flag size={size} className={className} />;
+      return <Flag size={size} />;
     case "Smile":
-      return <Smile size={size} className={className} />;
+      return <Smile size={size} />;
     case "Utensils":
-      return <Utensils size={size} className={className} />;
+      return <Utensils size={size} />;
     default:
-      return <Clock size={size} className={className} />;
+      return <Star size={size} />;
   }
 };
 
-export default function HistoryPage() {
+export default function StoryPage() {
   const [storeData, setStoreData] = useState<StoreData | null>(null);
-  const [milestones, setMilestones] = useState<Milestone[]>([]);
-  const [gallery, setGallery] = useState<GalleryItem[]>([]);
+  const [milestones, setMilestones] = useState<any[]>([]);
+  const [gallery, setGallery] = useState<any[]>([]);
+  const [reviews, setReviews] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isCopied, setIsCopied] = useState(false); // Fitur Copy Address
+
+  // UX States
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [isCopied, setIsCopied] = useState(false);
 
   // FETCH DATA
   useEffect(() => {
-    async function fetchData() {
+    async function init() {
       setIsLoading(true);
       try {
-        const [configRes, milestoneRes, galleryRes] = await Promise.all([
+        const [config, mile, gal, rev] = await Promise.all([
           supabase.from("store_config").select("*").single(),
-          supabase
-            .from("milestones")
-            .select("*")
-            .order("id", { ascending: true }),
+          supabase.from("milestones").select("*").order("id"),
           supabase.from("gallery").select("*").limit(6),
+          // Ambil review bintang 4 ke atas saja untuk ditampilkan di depan
+          supabase
+            .from("reviews")
+            .select("*")
+            .gte("rating", 4)
+            .limit(5)
+            .order("created_at", { ascending: false }),
         ]);
 
-        if (configRes.data) setStoreData(configRes.data);
-        if (milestoneRes.data) setMilestones(milestoneRes.data);
-        if (galleryRes.data) setGallery(galleryRes.data);
-      } catch (error) {
-        console.error("Error fetching data:", error);
-        toast.error("Gagal memuat data. Cek koneksi ya!");
+        if (config.data) {
+          setStoreData(config.data);
+          // SEO JSON-LD
+          const jsonLd = {
+            "@context": "https://schema.org",
+            "@type": "Restaurant",
+            name: config.data.name || "Angkringan Digital",
+            image: config.data.history_image_url,
+            address: config.data.address,
+            telephone: config.data.whatsapp_number,
+          };
+          const script = document.createElement("script");
+          script.type = "application/ld+json";
+          script.text = JSON.stringify(jsonLd);
+          document.head.appendChild(script);
+        }
+        if (mile.data) setMilestones(mile.data);
+        if (gal.data) setGallery(gal.data);
+        if (rev.data) setReviews(rev.data);
+      } catch (err) {
+        console.error("Error fetching story data:", err);
       } finally {
         setIsLoading(false);
       }
     }
-    fetchData();
+    init();
   }, []);
 
-  // FITUR: Copy Address
-  const handleCopyAddress = useCallback(() => {
+  const handleCopyAddress = () => {
     if (storeData?.address) {
       navigator.clipboard.writeText(storeData.address);
       setIsCopied(true);
+      if (navigator.vibrate) navigator.vibrate(50);
       toast.success("Alamat disalin! 📋");
       setTimeout(() => setIsCopied(false), 2000);
-      if (navigator.vibrate) navigator.vibrate(50);
     }
-  }, [storeData]);
+  };
 
   return (
     <MobileLayout>
-      {/* 1. HERO SECTION (Clean Layout) */}
-      <div className="relative h-[300px] w-full bg-zinc-900">
-        {isLoading ? (
-          <Skeleton className="w-full h-full bg-zinc-800" />
-        ) : (
-          <Image
-            src={
-              storeData?.history_image_url ||
-              "https://images.unsplash.com/photo-1555126634-323283e090fa?q=80&w=800&auto=format&fit=crop"
-            }
-            alt="Angkringan Story"
-            fill
-            className="object-cover"
-            priority
-            sizes="(max-width: 768px) 100vw, 800px"
-          />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/60 to-transparent" />
+      {/* HERO SECTION (Static Image - No Parallax) */}
+      <div className="relative h-[320px] w-full overflow-hidden bg-zinc-900">
+        {/* Gambar Diam (Statis) */}
+        <div className="absolute inset-0 w-full h-full">
+          {isLoading ? (
+            <Skeleton className="w-full h-full bg-zinc-800" />
+          ) : (
+            <Image
+              src={
+                storeData?.history_image_url ||
+                "https://images.unsplash.com/photo-1555126634-323283e090fa"
+              }
+              alt="Story Cover"
+              fill
+              className="object-cover"
+              priority
+            />
+          )}
+          {/* Gradient Overlay */}
+          <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/50 to-transparent" />
+        </div>
 
-        <div className="absolute bottom-0 left-0 p-6 w-full z-10">
-          <span className="inline-block px-3 py-1 bg-orange-500 text-white text-[10px] font-bold uppercase tracking-widest rounded-full mb-3 animate-in fade-in slide-in-from-left-4 duration-700">
-            Our Journey
+        <div className="absolute bottom-0 left-0 p-6 w-full z-10 translate-y-0 transform">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-orange-500/90 backdrop-blur-md text-white text-[10px] font-bold uppercase tracking-widest rounded-full mb-3 shadow-lg animate-in slide-in-from-left-4 duration-700">
+            <Flag size={10} fill="currentColor" /> Our Journey
           </span>
-          <h1 className="text-3xl font-black text-white leading-tight mb-2 drop-shadow-xl animate-in slide-in-from-bottom-4 duration-700 delay-100">
-            {storeData?.history_title || "Cerita Rasa"}
+          <h1 className="text-4xl font-black text-white leading-none mb-2 drop-shadow-2xl animate-in slide-in-from-bottom-4 duration-700">
+            {storeData?.history_title || "Perjalanan Rasa"}
           </h1>
         </div>
       </div>
 
-      <div className="px-6 py-8 space-y-12 bg-zinc-950 min-h-screen">
-        {/* 2. STATS GRID (Bento Style - FIX OVERLAP) */}
-        {/* Tidak ada margin negatif, layout grid murni */}
-        <section>
-          <div className="grid grid-cols-3 gap-3">
-            {isLoading
-              ? Array.from({ length: 3 }).map((_, i) => (
-                  <Skeleton
-                    key={i}
-                    className="h-24 w-full rounded-2xl bg-zinc-900"
-                  />
-                ))
-              : milestones.map((m) => (
-                  <div
-                    key={m.id}
-                    className="bg-zinc-900 border border-white/5 p-3 rounded-2xl flex flex-col items-center justify-center text-center gap-1 hover:border-orange-500/30 transition-all group"
-                  >
-                    <div className="text-orange-500 bg-orange-500/10 p-2 rounded-full mb-1 group-hover:scale-110 transition-transform">
-                      <IconMap name={m.icon} size={18} />
-                    </div>
-                    <span className="text-lg font-black text-white leading-none">
-                      {m.value}
-                    </span>
-                    <span className="text-[9px] text-zinc-500 uppercase font-bold tracking-wider">
-                      {m.label}
-                    </span>
-                  </div>
-                ))}
-          </div>
-        </section>
-
-        {/* 3. STORY CONTENT (Typography Focus) */}
-        <section className="space-y-6">
-          <div className="flex items-start gap-4">
-            <Quote className="text-orange-500 shrink-0 rotate-180" size={24} />
-            <div>
-              {isLoading ? (
-                <div className="space-y-2">
-                  <Skeleton className="h-4 w-full bg-zinc-900" />
-                  <Skeleton className="h-4 w-5/6 bg-zinc-900" />
-                  <Skeleton className="h-4 w-4/6 bg-zinc-900" />
+      <div className="px-5 py-8 space-y-10 bg-zinc-950 min-h-screen relative z-20 rounded-t-[2rem] -mt-6 border-t border-white/5 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
+        {/* MILESTONES (Stats dari DB) */}
+        <section className="grid grid-cols-3 gap-3">
+          {isLoading
+            ? Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} className="h-20 rounded-2xl bg-zinc-900" />
+              ))
+            : milestones.map((m) => (
+                <div
+                  key={m.id}
+                  className="bg-zinc-900/50 border border-white/5 p-3 rounded-2xl flex flex-col items-center justify-center text-center gap-1 hover:bg-zinc-900 transition-colors"
+                >
+                  <span className="text-orange-500 mb-1">
+                    <IconMap name={m.icon} size={20} />
+                  </span>
+                  <span className="text-lg font-black text-white leading-none">
+                    {m.value}
+                  </span>
+                  <span className="text-[9px] text-zinc-500 uppercase font-bold tracking-wider">
+                    {m.label}
+                  </span>
                 </div>
-              ) : (
-                <p className="text-zinc-300 text-sm leading-7 font-light text-justify whitespace-pre-line">
-                  {storeData?.history_description ||
-                    "Cerita belum ditambahkan oleh admin."}
-                </p>
-              )}
-            </div>
-          </div>
+              ))}
         </section>
 
-        {/* 4. GALLERY GRID (Masonry Feel) */}
-        <section>
-          <div className="flex items-center justify-between mb-4 border-l-2 border-orange-500 pl-3">
-            <h3 className="text-white font-bold text-lg">Momen Terbaik 📸</h3>
-          </div>
+        {/* STORY TEXT */}
+        <section className="relative">
+          <Quote
+            className="absolute -top-4 -left-2 text-orange-500/20 rotate-180"
+            size={48}
+          />
+          <p className="text-zinc-300 text-sm leading-7 font-light text-justify relative z-10 pl-4 border-l-2 border-orange-500/50">
+            {storeData?.history_description || "Loading story..."}
+          </p>
+        </section>
 
-          <div className="grid grid-cols-2 gap-3">
+        {/* GALLERY */}
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-white font-bold text-lg">Galeri 📸</h3>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
             {isLoading
               ? Array.from({ length: 4 }).map((_, i) => (
                   <Skeleton key={i} className="h-32 rounded-xl bg-zinc-900" />
@@ -210,119 +225,148 @@ export default function HistoryPage() {
               : gallery.map((item, idx) => (
                   <div
                     key={item.id}
-                    className={`relative rounded-xl overflow-hidden group bg-zinc-900 border border-white/5 ${idx % 3 === 0 ? "col-span-2 h-48" : "h-36"}`}
+                    onClick={() => setSelectedImage(item.image_url)}
+                    className={`relative rounded-xl overflow-hidden bg-zinc-900 cursor-pointer group ${idx % 3 === 0 ? "col-span-2 h-48" : "h-36"}`}
                   >
                     <Image
                       src={item.image_url}
                       alt="Gallery"
                       fill
                       className="object-cover transition-transform duration-700 group-hover:scale-110 opacity-80 group-hover:opacity-100"
-                      sizes="(max-width: 768px) 100vw, 500px"
-                      loading="lazy"
                     />
+                    <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition-colors flex items-center justify-center">
+                      <Maximize2
+                        className="text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-md"
+                        size={24}
+                      />
+                    </div>
                   </div>
                 ))}
           </div>
         </section>
 
-        {/* 5. LOCATION (Interactive & Copyable) */}
+        {/* REVIEWS (Dari DB) */}
+        {reviews.length > 0 && (
+          <section className="overflow-hidden">
+            <h3 className="text-white font-bold text-sm mb-4 px-1">
+              Kata Mereka ❤️
+            </h3>
+            <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide snap-x">
+              {reviews.map((r, i) => (
+                <ReviewCard key={i} review={r} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* LOCATION & CONTACT */}
         <section className="space-y-4">
           <h3 className="text-white font-bold text-lg flex items-center gap-2">
-            <MapPin className="text-orange-500" /> Lokasi Kami
+            <MapPin className="text-orange-500" /> Lokasi
           </h3>
 
-          {/* Address Card */}
           <div
             onClick={handleCopyAddress}
-            className="flex items-center justify-between bg-zinc-900 p-4 rounded-xl border border-white/5 cursor-pointer active:scale-[0.98] transition-all"
+            className="flex items-center justify-between bg-zinc-900 p-4 rounded-2xl border border-white/5 cursor-pointer active:scale-95 transition-all"
           >
-            <div className="flex flex-col">
+            <div className="flex flex-col overflow-hidden">
               <span className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">
-                Alamat Lengkap
+                Alamat
               </span>
-              <p className="text-sm text-zinc-300 font-medium line-clamp-1">
-                {storeData?.address || "Loading..."}
+              <p className="text-sm text-zinc-300 font-medium truncate">
+                {storeData?.address || "..."}
               </p>
             </div>
-            <div className="text-zinc-500">
+            <div className="text-zinc-500 bg-zinc-800 p-2 rounded-full">
               {isCopied ? (
-                <CheckCircle size={18} className="text-green-500" />
+                <CheckCircle size={16} className="text-green-500" />
               ) : (
-                <Copy size={18} />
+                <Copy size={16} />
               )}
             </div>
           </div>
 
-          {/* Map Embed (Lazy Load via Iframe) */}
-          <div className="rounded-2xl overflow-hidden border border-white/10 shadow-2xl h-56 bg-zinc-900 relative group">
-            {isLoading ? (
-              <Skeleton className="w-full h-full" />
-            ) : (
+          <div className="rounded-2xl overflow-hidden border border-white/10 h-48 bg-zinc-900 relative group">
+            {storeData?.map_embed_url && (
               <iframe
-                src={storeData?.map_embed_url}
+                src={storeData.map_embed_url}
                 width="100%"
                 height="100%"
                 style={{ border: 0 }}
-                allowFullScreen
                 loading="lazy"
-                referrerPolicy="no-referrer-when-downgrade"
-                className="grayscale opacity-70 group-hover:grayscale-0 group-hover:opacity-100 transition-all duration-700"
+                className="grayscale opacity-60 group-hover:grayscale-0 group-hover:opacity-100 transition-all duration-700"
               />
             )}
-            {/* Overlay Button */}
             <a
-              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(storeData?.address || "")}`}
+              href={`http://maps.google.com/?q=${encodeURIComponent(storeData?.address || "")}`}
               target="_blank"
-              rel="noreferrer"
-              className="absolute bottom-3 right-3 bg-white text-black px-4 py-2 rounded-full text-[10px] font-bold shadow-lg hover:bg-orange-500 hover:text-white transition-colors flex items-center gap-2 z-10"
+              className="absolute bottom-3 right-3 bg-white text-black px-4 py-2 rounded-full text-[10px] font-bold shadow-xl hover:bg-orange-500 hover:text-white transition-all flex items-center gap-2 z-10"
             >
-              Buka di Google Maps <ArrowRight size={12} />
+              Buka Peta <ArrowRight size={12} />
             </a>
           </div>
         </section>
 
-        {/* 6. FOOTER CONNECT */}
-        <div className="pt-8 border-t border-white/5 text-center space-y-6">
-          <h3 className="text-2xl font-black text-white tracking-tighter">
-            Angkringan<span className="text-orange-500">Digital.</span>
-          </h3>
-
-          <div className="flex justify-center gap-4">
+        {/* FOOTER */}
+        <div className="pt-6 border-t border-white/5 pb-20">
+          <div className="flex justify-center gap-4 mb-6">
             <a
               href={storeData?.instagram_url}
               target="_blank"
-              className="p-3 bg-zinc-900 border border-zinc-800 rounded-full text-pink-500 hover:bg-pink-500 hover:text-white hover:border-pink-500 transition-all"
+              className="p-3 bg-zinc-900 border border-zinc-800 rounded-full text-pink-500 hover:scale-110 transition-transform"
             >
-              <Instagram size={20} />
+              <Instagram size={22} />
             </a>
             <a
               href={`https://wa.me/${storeData?.whatsapp_number}`}
               target="_blank"
-              className="p-3 bg-zinc-900 border border-zinc-800 rounded-full text-green-500 hover:bg-green-500 hover:text-white hover:border-green-500 transition-all"
+              className="p-3 bg-zinc-900 border border-zinc-800 rounded-full text-green-500 hover:scale-110 transition-transform"
             >
-              <Phone size={20} />
+              <Phone size={22} />
             </a>
             <button
-              className="p-3 bg-zinc-900 border border-zinc-800 rounded-full text-blue-500 hover:bg-blue-500 hover:text-white hover:border-blue-500 transition-all"
-              onClick={() => {
-                if (navigator.share)
-                  navigator.share({
-                    title: "Angkringan Mas Radit",
-                    url: window.location.href,
-                  });
-              }}
+              onClick={() =>
+                navigator.share?.({
+                  title: storeData?.name,
+                  url: window.location.href,
+                })
+              }
+              className="p-3 bg-zinc-900 border border-zinc-800 rounded-full text-blue-500 hover:scale-110 transition-transform"
             >
-              <Share2 size={20} />
+              <Share2 size={22} />
             </button>
           </div>
-
-          <p className="text-[10px] text-zinc-600 pb-10">
-            © {new Date().getFullYear()}{" "}
-            {storeData?.name || "Angkringan Digital"}.<br />
-            Created with ❤️ for UMKM Indonesia.
+          <p className="text-center text-[10px] text-zinc-600">
+            © {new Date().getFullYear()} {storeData?.name}.<br />
+            All Rights Reserved.
           </p>
         </div>
       </div>
+
+      {/* LIGHTBOX MODAL */}
+      <Dialog
+        open={!!selectedImage}
+        onOpenChange={() => setSelectedImage(null)}
+      >
+        <DialogContent className="bg-black/90 border-none p-0 max-w-none w-screen h-screen flex items-center justify-center outline-none">
+          <div className="relative w-full max-w-md aspect-square">
+            {selectedImage && (
+              <Image
+                src={selectedImage}
+                alt="Full"
+                fill
+                className="object-contain"
+              />
+            )}
+          </div>
+          <button
+            onClick={() => setSelectedImage(null)}
+            className="absolute top-5 right-5 text-white bg-white/10 p-2 rounded-full backdrop-blur-md"
+          >
+            <X size={24} />
+          </button>
+        </DialogContent>
+      </Dialog>
     </MobileLayout>
   );
 }

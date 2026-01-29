@@ -15,10 +15,11 @@ import {
   List as ListIcon,
   Check,
   Zap,
+  QrCode,
+  ArrowDown,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
-import { FloatingCart } from "@/components/features/cart/FloatingCart";
-import { MenuSkeleton } from "@/components/features/menu/MenuSkeleton";
+import { useState, useEffect, useCallback, Suspense, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
   Popover,
@@ -28,10 +29,10 @@ import {
 import { toast } from "sonner";
 import dynamic from "next/dynamic";
 
-// IMPORT KARTU YANG SAMA DENGAN HOME (Konsistensi Desain)
+import { FloatingCart } from "@/components/features/cart/FloatingCart";
 import { HomeProductCard } from "@/components/features/home/HomeProductCard";
+import { Skeleton } from "@/components/ui/skeleton";
 
-// LAZY LOAD MODAL (Optimasi Performa Awal)
 const ProductDetailModal = dynamic(
   () =>
     import("@/components/features/menu/ProductDetailModal").then(
@@ -48,7 +49,6 @@ const CATEGORIES_UI = [
   { id: "snack", name: "Cemilan", icon: "🍟" },
 ];
 
-// Tipe Data
 interface ExtendedMenuItem extends MenuItem {
   description: string;
   rating: number;
@@ -58,133 +58,164 @@ interface ExtendedMenuItem extends MenuItem {
   isAvailable?: boolean;
 }
 
-const ITEMS_PER_PAGE = 8;
+const CACHE_KEY_MENU = "menu_items_cache";
 
-export default function MenuPage() {
+function MenuContent() {
   const { addToCart } = useCart();
+  const searchParams = useSearchParams();
 
-  // STATE DATA
+  // STATE
   const [dbMenuItems, setDbMenuItems] = useState<ExtendedMenuItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [page, setPage] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
 
-  // STATE FILTER
+  // PULL TO REFRESH STATE
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [pullY, setPullY] = useState(0);
+  const startY = useRef(0);
+  const isPulling = useRef(false);
+
+  // FILTER & VIEW
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState("all");
   const [sortBy, setSortBy] = useState<"newest" | "price_asc" | "price_desc">(
     "newest",
   );
-
-  // STATE UX
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [selectedProduct, setSelectedProduct] =
     useState<ExtendedMenuItem | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
-
-  // Rate Limiting (Keamanan Client-Side)
   const [lastClickTime, setLastClickTime] = useState(0);
 
-  // Load View Mode Preference
-  useEffect(() => {
-    const savedView = localStorage.getItem("viewMode");
-    if (savedView === "list" || savedView === "grid") setViewMode(savedView);
+  // FETCH DATA
+  const fetchMenu = useCallback(async (forceRefresh = false) => {
+    if (forceRefresh) setIsRefreshing(true);
+
+    if (!forceRefresh) {
+      const cachedData = sessionStorage.getItem(CACHE_KEY_MENU);
+      if (cachedData) {
+        setDbMenuItems(JSON.parse(cachedData));
+        setIsLoading(false);
+        if (!forceRefresh) return;
+      } else {
+        setIsLoading(true);
+      }
+    }
+
+    try {
+      // Simulasi delay sedikit biar animasi refresh kelihatan (UX)
+      if (forceRefresh) await new Promise((r) => setTimeout(r, 800));
+
+      const { data, error } = await supabase
+        .from("menu_items")
+        .select(`*, categories(slug)`)
+        .order("id", { ascending: false });
+
+      if (error) throw error;
+
+      if (data) {
+        const formattedData: ExtendedMenuItem[] = data.map((item: any) => ({
+          id: item.id.toString(),
+          name: item.name,
+          description: item.description || "Menu lezat khas angkringan.",
+          price: item.price,
+          originalPrice: item.original_price || 0,
+          rating: item.rating_avg || 5.0,
+          category: item.categories?.slug || "umum",
+          image: item.image_url || "",
+          isAvailable: item.is_available ?? true,
+        }));
+
+        setDbMenuItems(formattedData);
+        sessionStorage.setItem(CACHE_KEY_MENU, JSON.stringify(formattedData));
+      }
+    } catch (err) {
+      console.error("Gagal ambil menu:", err);
+      // Silent error jika refresh, toast jika initial load gagal
+      if (!forceRefresh) toast.error("Gagal memuat menu.");
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+      setPullY(0); // Reset posisi pull
+    }
   }, []);
 
-  const changeViewMode = (mode: "grid" | "list") => {
-    setViewMode(mode);
-    localStorage.setItem("viewMode", mode);
-  };
-
-  // FETCH DATA
-  const fetchMenu = useCallback(
-    async (isLoadMore = false) => {
-      if (!isLoadMore) setIsLoading(true);
-      else setIsLoadingMore(true);
-
-      try {
-        const currentPage = isLoadMore ? page + 1 : 0;
-        const from = currentPage * ITEMS_PER_PAGE;
-        const to = from + ITEMS_PER_PAGE - 1;
-
-        let query = supabase.from("menu_items").select(`*, categories(slug)`);
-
-        // 1. Search Logic
-        if (searchQuery) query = query.ilike("name", `%${searchQuery}%`);
-
-        // 2. Sorting Logic
-        if (sortBy === "price_asc")
-          query = query.order("price", { ascending: true });
-        else if (sortBy === "price_desc")
-          query = query.order("price", { ascending: false });
-        else query = query.order("id", { ascending: false });
-
-        // 3. Pagination
-        query = query.range(from, to);
-
-        const { data, error } = await query;
-        if (error) throw error;
-
-        if (data) {
-          // Mapping Data
-          let formattedData: ExtendedMenuItem[] = data.map((item: any) => ({
-            id: item.id.toString(),
-            name: item.name,
-            description: item.description || "Menu lezat khas angkringan.",
-            price: item.price,
-            originalPrice: item.original_price || 0,
-            rating: item.rating_avg || 5.0, // Pakai data real DB
-            category: item.categories?.slug || "umum",
-            image: item.image_url || "",
-            isAvailable: item.is_available ?? true,
-          }));
-
-          // Client-side Category Filter (Karena struktur DB relasi)
-          if (activeCategory !== "all") {
-            formattedData = formattedData.filter(
-              (item) => item.category === activeCategory,
-            );
-          }
-
-          if (data.length < ITEMS_PER_PAGE) setHasMore(false);
-          else setHasMore(true);
-
-          if (isLoadMore) {
-            setDbMenuItems((prev) => [...prev, ...formattedData]);
-            setPage(currentPage);
-          } else {
-            setDbMenuItems(formattedData);
-            setPage(0);
-          }
-        }
-      } catch (err) {
-        console.error("Gagal ambil menu:", err);
-        toast.error("Gagal memuat menu. Cek koneksi ya!");
-      } finally {
-        setIsLoading(false);
-        setIsLoadingMore(false);
-      }
-    },
-    [activeCategory, searchQuery, sortBy, page],
-  );
-
-  // Trigger Fetch saat filter berubah
   useEffect(() => {
-    fetchMenu(false);
-  }, [activeCategory, searchQuery, sortBy]);
+    fetchMenu();
+  }, [fetchMenu]);
+
+  // --- LOGIC PULL TO REFRESH MANUAL ---
+  useEffect(() => {
+    const handleTouchStart = (e: TouchEvent) => {
+      if (window.scrollY === 0) {
+        startY.current = e.touches[0].clientY;
+        isPulling.current = true;
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!isPulling.current) return;
+      const currentY = e.touches[0].clientY;
+      const delta = currentY - startY.current;
+
+      // Hanya izinkan tarik jika scroll paling atas dan tarik ke bawah
+      if (window.scrollY === 0 && delta > 0) {
+        // Logarithmic resistance (makin ditarik makin berat)
+        setPullY(Math.min(delta * 0.4, 120));
+      } else {
+        setPullY(0);
+      }
+    };
+
+    const handleTouchEnd = () => {
+      isPulling.current = false;
+      if (pullY > 60) {
+        // Threshold refresh
+        fetchMenu(true); // Trigger refresh
+      } else {
+        setPullY(0); // Batal refresh
+      }
+    };
+
+    window.addEventListener("touchstart", handleTouchStart);
+    window.addEventListener("touchmove", handleTouchMove);
+    window.addEventListener("touchend", handleTouchEnd);
+
+    return () => {
+      window.removeEventListener("touchstart", handleTouchStart);
+      window.removeEventListener("touchmove", handleTouchMove);
+      window.removeEventListener("touchend", handleTouchEnd);
+    };
+  }, [pullY, fetchMenu]);
+
+  // FILTERING LOGIC
+  const filteredItems = dbMenuItems
+    .filter((item) => {
+      if (activeCategory !== "all" && item.category !== activeCategory)
+        return false;
+      if (
+        searchQuery &&
+        !item.name.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+        return false;
+      return true;
+    })
+    .sort((a, b) => {
+      if (sortBy === "price_asc") return a.price - b.price;
+      if (sortBy === "price_desc") return b.price - a.price;
+      return parseInt(b.id) - parseInt(a.id);
+    });
 
   // UX Scroll Top
   useEffect(() => {
     const handleScroll = () => setShowScrollTop(window.scrollY > 300);
-    window.addEventListener("scroll", handleScroll);
+    window.addEventListener("scroll", handleScroll, { passive: true });
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
   const handleProductClick = useCallback((product: ExtendedMenuItem) => {
     if (!product.isAvailable) {
-      toast.error("Maaf, menu ini sedang habis! 😭");
+      toast.error("Maaf, menu ini habis! 😭");
       return;
     }
     setSelectedProduct(product);
@@ -194,13 +225,10 @@ export default function MenuPage() {
   const handleQuickAdd = useCallback(
     (e: React.MouseEvent, product: ExtendedMenuItem) => {
       e.stopPropagation();
-      // Anti Spam Click
       const now = Date.now();
       if (now - lastClickTime < 400) return;
       setLastClickTime(now);
-
       if (!product.isAvailable) return;
-
       addToCart(product);
       if (navigator.vibrate) navigator.vibrate(50);
       toast.success("Masuk keranjang! 🛒");
@@ -209,7 +237,27 @@ export default function MenuPage() {
   );
 
   return (
-    <MobileLayout>
+    <>
+      {/* PULL TO REFRESH INDICATOR */}
+      <div
+        className="fixed top-20 left-0 w-full flex justify-center z-30 pointer-events-none transition-transform duration-200"
+        style={{ transform: `translateY(${pullY > 0 ? pullY - 40 : -100}px)` }}
+      >
+        <div className="bg-zinc-900 border border-zinc-700 text-white rounded-full p-2 shadow-xl flex items-center gap-2">
+          {isRefreshing ? (
+            <>
+              <Loader2 className="animate-spin text-orange-500" size={20} />{" "}
+              <span className="text-xs font-bold">Update Menu...</span>
+            </>
+          ) : (
+            <ArrowDown
+              size={20}
+              className={`text-zinc-400 ${pullY > 60 ? "rotate-180 transition-transform" : ""}`}
+            />
+          )}
+        </div>
+      </div>
+
       {/* HEADER STICKY */}
       <div className="sticky top-0 z-40 bg-zinc-950/90 backdrop-blur-xl border-b border-white/5 pb-2 shadow-lg shadow-black/20">
         <div className="pt-4 px-5 pb-3">
@@ -219,23 +267,25 @@ export default function MenuPage() {
                 Daftar Menu 📜
               </h1>
               <p className="text-[10px] text-zinc-500 mt-1">
-                {dbMenuItems.length} menu lezat tersedia
+                {dbMenuItems.length > 0
+                  ? `${dbMenuItems.length} menu tersedia`
+                  : "Memuat menu..."}
               </p>
             </div>
 
-            {/* TOGGLE VIEW MODE */}
-            <div className="flex bg-zinc-900 p-1 rounded-lg border border-zinc-800">
+            {/* TOMBOL REFRESH DIHAPUS, DIGANTI VIEW MODE SAJA */}
+            <div className="flex bg-zinc-900 p-1 rounded-xl border border-zinc-800">
               <button
-                onClick={() => changeViewMode("grid")}
-                className={`p-1.5 rounded-md transition-all ${viewMode === "grid" ? "bg-zinc-800 text-orange-500 shadow-sm" : "text-zinc-500 hover:text-white"}`}
+                onClick={() => setViewMode("grid")}
+                className={`p-1.5 rounded-lg transition-all ${viewMode === "grid" ? "bg-zinc-800 text-orange-500 shadow-sm" : "text-zinc-500 hover:text-white"}`}
               >
-                <LayoutGrid size={16} />
+                <LayoutGrid size={18} />
               </button>
               <button
-                onClick={() => changeViewMode("list")}
-                className={`p-1.5 rounded-md transition-all ${viewMode === "list" ? "bg-zinc-800 text-orange-500 shadow-sm" : "text-zinc-500 hover:text-white"}`}
+                onClick={() => setViewMode("list")}
+                className={`p-1.5 rounded-lg transition-all ${viewMode === "list" ? "bg-zinc-800 text-orange-500 shadow-sm" : "text-zinc-500 hover:text-white"}`}
               >
-                <ListIcon size={16} />
+                <ListIcon size={18} />
               </button>
             </div>
           </div>
@@ -262,7 +312,6 @@ export default function MenuPage() {
               )}
             </div>
 
-            {/* FILTER POPOVER (Sama seperti Home) */}
             <Popover>
               <PopoverTrigger asChild>
                 <Button
@@ -297,11 +346,7 @@ export default function MenuPage() {
                     <button
                       key={opt.id}
                       onClick={() => setSortBy(opt.id as any)}
-                      className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all ${
-                        sortBy === opt.id
-                          ? "bg-orange-500 text-white shadow-md shadow-orange-500/20"
-                          : "text-zinc-300 hover:bg-zinc-800"
-                      }`}
+                      className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-xl transition-all ${sortBy === opt.id ? "bg-orange-500 text-white" : "text-zinc-300 hover:bg-zinc-800"}`}
                     >
                       <div className="flex items-center gap-2">
                         <opt.icon
@@ -313,34 +358,18 @@ export default function MenuPage() {
                       {sortBy === opt.id && <Check size={14} />}
                     </button>
                   ))}
-
-                  {sortBy !== "newest" && (
-                    <div className="pt-2 mt-2 border-t border-white/5">
-                      <button
-                        onClick={() => setSortBy("newest")}
-                        className="w-full text-xs text-center text-red-400 hover:text-red-300 py-1"
-                      >
-                        Reset Filter
-                      </button>
-                    </div>
-                  )}
                 </div>
               </PopoverContent>
             </Popover>
           </div>
         </div>
 
-        {/* KATEGORI SCROLL */}
         <div className="flex gap-2 overflow-x-auto px-5 pb-2 scrollbar-hide">
           {CATEGORIES_UI.map((cat) => (
             <button
               key={cat.id}
               onClick={() => setActiveCategory(cat.id)}
-              className={`whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 border ${
-                activeCategory === cat.id
-                  ? "bg-white text-black border-white shadow shadow-white/10 font-bold"
-                  : "bg-zinc-900 text-zinc-400 border-zinc-800 hover:border-zinc-700"
-              }`}
+              className={`whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 border ${activeCategory === cat.id ? "bg-white text-black border-white font-bold" : "bg-zinc-900 text-zinc-400 border-zinc-800"}`}
             >
               <span className="text-sm">{cat.icon}</span> {cat.name}
             </button>
@@ -350,56 +379,31 @@ export default function MenuPage() {
 
       {/* CONTENT AREA */}
       <div className="p-5 min-h-screen pb-32">
-        {isLoading ? (
-          <div className="space-y-4">
-            <div className="flex justify-center py-8">
-              <Loader2 className="animate-spin text-orange-500" size={32} />
-            </div>
-            <MenuSkeleton />
+        {isLoading && dbMenuItems.length === 0 ? (
+          <div className="grid grid-cols-2 gap-4">
+            {/* SKELETON DIUPDATE JADI KOTAK BESAR (H-64) BIAR SESUAI CARD BARU */}
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton
+                key={i}
+                className="h-64 w-full rounded-[1.5rem] bg-zinc-900"
+              />
+            ))}
           </div>
-        ) : dbMenuItems.length > 0 ? (
-          <>
-            {/* GRID / LIST VIEW SWITCHER */}
-            <div
-              className={`
-                ${
-                  viewMode === "grid"
-                    ? "grid grid-cols-2 gap-4 animate-in fade-in zoom-in duration-500"
-                    : "flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-4 duration-500"
-                }
-            `}
-            >
-              {dbMenuItems.map((product) => (
-                // MENGGUNAKAN KOMPONEN KARTU YANG SAMA DENGAN HOME (REUSABLE)
-                <HomeProductCard
-                  key={product.id}
-                  product={product}
-                  isHorizontal={viewMode === "list"} // List Mode = Horizontal Card
-                  showLove={false} // LOVE DIMATIKAN
-                  onClick={() => handleProductClick(product)}
-                  onQuickAdd={(e) => handleQuickAdd(e, product)}
-                  // onToggleFavorite tidak dipassing (otomatis hilang)
-                />
-              ))}
-            </div>
-
-            {hasMore && !searchQuery && (
-              <div className="mt-8 flex justify-center">
-                <Button
-                  onClick={() => fetchMenu(true)}
-                  disabled={isLoadingMore}
-                  variant="outline"
-                  className="border-zinc-800 bg-zinc-900 text-zinc-300 min-w-[150px] rounded-full"
-                >
-                  {isLoadingMore ? (
-                    <Loader2 className="animate-spin mr-2" size={16} />
-                  ) : (
-                    "Muat Lebih Banyak 👇"
-                  )}
-                </Button>
-              </div>
-            )}
-          </>
+        ) : filteredItems.length > 0 ? (
+          <div
+            className={`${viewMode === "grid" ? "grid grid-cols-2 gap-4" : "flex flex-col gap-3"}`}
+          >
+            {filteredItems.map((product) => (
+              <HomeProductCard
+                key={product.id}
+                product={product}
+                isHorizontal={viewMode === "list"}
+                showLove={false}
+                onClick={() => handleProductClick(product)}
+                onQuickAdd={(e) => handleQuickAdd(e, product)}
+              />
+            ))}
+          </div>
         ) : (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="w-20 h-20 bg-zinc-900/50 rounded-full flex items-center justify-center mb-4 animate-pulse">
@@ -407,7 +411,7 @@ export default function MenuPage() {
             </div>
             <h3 className="text-white font-bold mb-1">Menu tidak ditemukan</h3>
             <p className="text-zinc-500 text-xs px-10 mb-4">
-              Mungkin salah ketik atau belum ada menu di kategori ini.
+              Coba cari kata kunci lain ya.
             </p>
             <Button
               variant="outline"
@@ -438,7 +442,6 @@ export default function MenuPage() {
 
       <FloatingCart />
 
-      {/* MODAL DETAIL (Render Conditional) */}
       {isModalOpen && selectedProduct && (
         <ProductDetailModal
           isOpen={isModalOpen}
@@ -446,6 +449,22 @@ export default function MenuPage() {
           product={selectedProduct}
         />
       )}
+    </>
+  );
+}
+
+export default function MenuPage() {
+  return (
+    <MobileLayout>
+      <Suspense
+        fallback={
+          <div className="flex h-screen items-center justify-center bg-zinc-950">
+            <Loader2 className="animate-spin text-orange-500" />
+          </div>
+        }
+      >
+        <MenuContent />
+      </Suspense>
     </MobileLayout>
   );
 }
