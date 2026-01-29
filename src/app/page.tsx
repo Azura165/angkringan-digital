@@ -20,7 +20,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Loader2,
-  ArrowDown,
 } from "lucide-react";
 import Link from "next/link";
 import { useState, useEffect, useCallback, useRef, useTransition } from "react";
@@ -84,6 +83,7 @@ const GRADIENT_MAP: Record<string, string> = {
 };
 
 const CACHE_KEY_STORE = "store_config_cache";
+const CACHE_KEY_HOME_DATA = "home_data_cache_v1"; // Cache Key untuk Data Home
 
 export default function Home() {
   const { addToCart } = useCart();
@@ -131,19 +131,38 @@ export default function Home() {
   );
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // PULL TO REFRESH STATE
-  const [pullY, setPullY] = useState(0);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const startY = useRef(0);
-  const isPulling = useRef(false);
-
   // FETCH DATA FUNCTION
   const fetchData = useCallback(
     async (forceRefresh = false) => {
-      if (forceRefresh) setIsRefreshing(true);
-      else if (!storeInfo.open_hour) setIsLoading(true);
+      // 1. CEK CACHE DULU (Agar Instan)
+      if (!forceRefresh) {
+        const cachedHome = sessionStorage.getItem(CACHE_KEY_HOME_DATA);
+        if (cachedHome) {
+          try {
+            const parsed = JSON.parse(cachedHome);
+            if (parsed.recommendedItems)
+              setRecommendedItems(parsed.recommendedItems);
+            if (parsed.newItems) setNewItems(parsed.newItems);
+            if (parsed.promos) setPromos(parsed.promos);
+            if (parsed.pedasItems) setPedasItems(parsed.pedasItems);
+            if (parsed.segarItems) setSegarItems(parsed.segarItems);
+            if (parsed.kenyangItems) setKenyangItems(parsed.kenyangItems);
+            if (parsed.cemilanItems) setCemilanItems(parsed.cemilanItems);
+
+            setIsLoading(false); // Stop loading karena data cache sudah tampil
+          } catch (e) {
+            console.error("Cache parse error", e);
+          }
+        }
+      }
+
+      // Jika data cache kosong atau dipaksa refresh, set loading
+      if (!sessionStorage.getItem(CACHE_KEY_HOME_DATA) || forceRefresh) {
+        setIsLoading(true);
+      }
 
       try {
+        // Delay sedikit jika refresh manual biar kerasa 'loading'-nya (UX)
         if (forceRefresh) await new Promise((r) => setTimeout(r, 800));
 
         const [
@@ -178,15 +197,30 @@ export default function Home() {
           supabase.from("menu_items").select("*").eq("category_id", 4).limit(6),
         ]);
 
-        if (recRes.data) setRecommendedItems(recRes.data.map(formatMenuItem));
-        if (newRes.data) setNewItems(newRes.data.map(formatMenuItem));
-        if (promoRes.data) setPromos(promoRes.data);
-        if (pedasRes.data) setPedasItems(pedasRes.data.map(formatMenuItem));
-        if (segarRes.data) setSegarItems(segarRes.data.map(formatMenuItem));
-        if (kenyangRes.data)
-          setKenyangItems(kenyangRes.data.map(formatMenuItem));
-        if (cemilanRes.data)
-          setCemilanItems(cemilanRes.data.map(formatMenuItem));
+        // Helper format
+        const fmt = (data: any[]) => (data ? data.map(formatMenuItem) : []);
+
+        const newData = {
+          recommendedItems: fmt(recRes.data || []),
+          newItems: fmt(newRes.data || []),
+          promos: promoRes.data || [],
+          pedasItems: fmt(pedasRes.data || []),
+          segarItems: fmt(segarRes.data || []),
+          kenyangItems: fmt(kenyangRes.data || []),
+          cemilanItems: fmt(cemilanRes.data || []),
+        };
+
+        // Set State dengan data baru
+        setRecommendedItems(newData.recommendedItems);
+        setNewItems(newData.newItems);
+        setPromos(newData.promos);
+        setPedasItems(newData.pedasItems);
+        setSegarItems(newData.segarItems);
+        setKenyangItems(newData.kenyangItems);
+        setCemilanItems(newData.cemilanItems);
+
+        // SIMPAN KE CACHE
+        sessionStorage.setItem(CACHE_KEY_HOME_DATA, JSON.stringify(newData));
 
         if (configRes.data) {
           const now = new Date();
@@ -209,8 +243,6 @@ export default function Home() {
         if (forceRefresh) toast.error("Gagal update data");
       } finally {
         setIsLoading(false);
-        setIsRefreshing(false);
-        setPullY(0);
       }
     },
     [storeInfo.open_hour],
@@ -246,36 +278,6 @@ export default function Home() {
       window.removeEventListener("scroll", handleScroll);
     };
   }, [fetchData]);
-
-  // LOGIC PULL REFRESH MANUAL
-  useEffect(() => {
-    const handleTouchStart = (e: TouchEvent) => {
-      if (window.scrollY === 0) {
-        startY.current = e.touches[0].clientY;
-        isPulling.current = true;
-      }
-    };
-    const handleTouchMove = (e: TouchEvent) => {
-      if (!isPulling.current) return;
-      const delta = e.touches[0].clientY - startY.current;
-      if (window.scrollY === 0 && delta > 0)
-        setPullY(Math.min(delta * 0.4, 120));
-      else setPullY(0);
-    };
-    const handleTouchEnd = () => {
-      isPulling.current = false;
-      if (pullY > 60) fetchData(true);
-      else setPullY(0);
-    };
-    window.addEventListener("touchstart", handleTouchStart);
-    window.addEventListener("touchmove", handleTouchMove);
-    window.addEventListener("touchend", handleTouchEnd);
-    return () => {
-      window.removeEventListener("touchstart", handleTouchStart);
-      window.removeEventListener("touchmove", handleTouchMove);
-      window.removeEventListener("touchend", handleTouchEnd);
-    };
-  }, [pullY, fetchData]);
 
   const formatMenuItem = (item: any): HomeMenuItem => ({
     id: item.id.toString(),
@@ -354,6 +356,7 @@ export default function Home() {
           </Link>
         </div>
 
+        {/* Tombol Navigasi Desktop */}
         <div className="absolute top-1/2 -translate-y-1/2 left-2 z-20 hidden md:group-hover/section:block">
           <button
             onClick={() => scroll("left")}
@@ -409,25 +412,7 @@ export default function Home() {
 
   return (
     <MobileLayout>
-      <div
-        className="fixed top-20 left-0 w-full flex justify-center z-30 pointer-events-none transition-transform duration-200"
-        style={{ transform: `translateY(${pullY > 0 ? pullY - 40 : -100}px)` }}
-      >
-        <div className="bg-zinc-900 border border-zinc-700 text-white rounded-full p-2 shadow-xl flex items-center gap-2">
-          {isRefreshing ? (
-            <>
-              <Loader2 className="animate-spin text-orange-500" size={20} />
-              <span className="text-xs">Update...</span>
-            </>
-          ) : (
-            <ArrowDown
-              size={20}
-              className={pullY > 60 ? "rotate-180 transition-transform" : ""}
-            />
-          )}
-        </div>
-      </div>
-
+      {/* Scroll Progress Bar */}
       <div
         className="fixed top-0 left-0 h-1 bg-orange-600 z-[100]"
         style={{ width: `${scrollProgress * 100}%` }}
