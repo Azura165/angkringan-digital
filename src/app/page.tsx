@@ -20,6 +20,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ArrowUp,
+  Star,
 } from "lucide-react";
 import Link from "next/link";
 import { useState, useEffect, useCallback, useRef, useTransition } from "react";
@@ -66,6 +67,8 @@ interface StoreInfo {
   close_hour: string | null;
   running_text: string;
   isOpenNow: boolean;
+  ratingAvg: string; // Tambahan: Rating Toko
+  ratingCount: number; // Tambahan: Jumlah Ulasan
 }
 
 const HERO_IMAGES = [
@@ -82,8 +85,8 @@ const GRADIENT_MAP: Record<string, string> = {
   default: "bg-gradient-to-r from-orange-500 to-red-500",
 };
 
-const CACHE_KEY_STORE = "store_config_cache";
-const CACHE_KEY_HOME_DATA = "home_data_cache_v4"; // Bump version cache
+const CACHE_KEY_STORE = "store_config_cache_v2"; // Bump version untuk rating
+const CACHE_KEY_HOME_DATA = "home_data_cache_v5"; // Bump version
 
 export default function Home() {
   const { addToCart } = useCart();
@@ -105,7 +108,7 @@ export default function Home() {
   const [cemilanItems, setCemilanItems] = useState<HomeMenuItem[]>([]);
   const [promos, setPromos] = useState<Promo[]>([]);
 
-  // STATE STORE
+  // STATE STORE (Include Rating)
   const [storeInfo, setStoreInfo] = useState<StoreInfo>(() => {
     if (typeof window !== "undefined") {
       const cached = sessionStorage.getItem(CACHE_KEY_STORE);
@@ -118,6 +121,8 @@ export default function Home() {
       close_hour: null,
       running_text: "Selamat Datang!",
       isOpenNow: false,
+      ratingAvg: "5.0",
+      ratingCount: 0,
     };
   });
 
@@ -126,13 +131,13 @@ export default function Home() {
   const [heroIndex, setHeroIndex] = useState(0);
   const [greeting, setGreeting] = useState("Halo");
   const [lastClickTime, setLastClickTime] = useState(0);
-  const [showScrollTop, setShowScrollTop] = useState(false); // Fitur Back to Top
+  const [showScrollTop, setShowScrollTop] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<HomeMenuItem | null>(
     null,
   );
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // FETCH DATA (OPTIMIZED LIMIT 7)
+  // FETCH DATA (OPTIMIZED LIMIT 7 + REVIEWS)
   const fetchData = useCallback(async (forceRefresh = false) => {
     // 1. Cek Cache
     if (!forceRefresh && typeof window !== "undefined") {
@@ -155,7 +160,6 @@ export default function Home() {
     }
 
     try {
-      // 2. Fetch DB (LIMIT 7 sesuai request)
       const LIMIT_COUNT = 7;
 
       const [
@@ -167,6 +171,7 @@ export default function Home() {
         segarRes, // Kategori: Minuman
         kenyangRes, // Tag: Berat
         cemilanRes, // Kategori: Cemilan
+        reviewsRes, // NEW: Fetch Rating Toko
       ] = await Promise.all([
         supabase
           .from("menu_items")
@@ -207,6 +212,7 @@ export default function Home() {
           .eq("is_available", true)
           .eq("category_id", 4)
           .limit(LIMIT_COUNT),
+        supabase.from("reviews").select("rating"), // Ambil rating saja biar ringan
       ]);
 
       const fmt = (data: any[]) => (data ? data.map(formatMenuItem) : []);
@@ -231,6 +237,17 @@ export default function Home() {
 
       sessionStorage.setItem(CACHE_KEY_HOME_DATA, JSON.stringify(newData));
 
+      // CALCULATE RATING
+      const allRatings = reviewsRes.data || [];
+      const totalRating = allRatings.reduce(
+        (acc, curr) => acc + curr.rating,
+        0,
+      );
+      const avgRating =
+        allRatings.length > 0
+          ? (totalRating / allRatings.length).toFixed(1)
+          : "5.0";
+
       if (configRes.data) {
         const now = new Date();
         const currentTime = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`;
@@ -243,6 +260,8 @@ export default function Home() {
           isOpenNow:
             currentTime >= (configRes.data.open_hour || "17:00") &&
             currentTime <= (configRes.data.close_hour || "23:59"),
+          ratingAvg: avgRating,
+          ratingCount: allRatings.length,
         };
         setStoreInfo(newStoreInfo);
         sessionStorage.setItem(CACHE_KEY_STORE, JSON.stringify(newStoreInfo));
@@ -460,6 +479,11 @@ export default function Home() {
               opens: storeInfo.open_hour || "17:00",
               closes: storeInfo.close_hour || "23:59",
             },
+            aggregateRating: {
+              "@type": "AggregateRating",
+              ratingValue: storeInfo.ratingAvg,
+              reviewCount: storeInfo.ratingCount,
+            },
           }),
         }}
       />
@@ -488,21 +512,37 @@ export default function Home() {
         ))}
         <div className="absolute bottom-0 left-0 w-full p-6 pt-12 z-10">
           <div className="flex justify-between items-start mb-4">
-            <div
-              className={`px-3 py-1.5 rounded-full flex items-center gap-2 border backdrop-blur-md transition-colors ${storeInfo.isOpenNow ? "bg-emerald-500/20 border-emerald-500/30 text-emerald-400" : "bg-red-500/20 border-red-500/30 text-red-400"}`}
-            >
-              <span className="relative flex h-2 w-2">
-                <span
-                  className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${storeInfo.isOpenNow ? "bg-emerald-400" : "bg-red-400"}`}
-                ></span>
-                <span
-                  className={`relative inline-flex rounded-full h-2 w-2 ${storeInfo.isOpenNow ? "bg-emerald-500" : "bg-red-500"}`}
-                ></span>
-              </span>
-              <span className="text-[10px] font-bold uppercase tracking-wider">
-                {storeInfo.isOpenNow ? "Buka Sekarang" : "Tutup"}
-              </span>
+            <div className="flex gap-2">
+              <div
+                className={`px-3 py-1.5 rounded-full flex items-center gap-2 border backdrop-blur-md transition-colors ${storeInfo.isOpenNow ? "bg-emerald-500/20 border-emerald-500/30 text-emerald-400" : "bg-red-500/20 border-red-500/30 text-red-400"}`}
+              >
+                <span className="relative flex h-2 w-2">
+                  <span
+                    className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${storeInfo.isOpenNow ? "bg-emerald-400" : "bg-red-400"}`}
+                  ></span>
+                  <span
+                    className={`relative inline-flex rounded-full h-2 w-2 ${storeInfo.isOpenNow ? "bg-emerald-500" : "bg-red-500"}`}
+                  ></span>
+                </span>
+                <span className="text-[10px] font-bold uppercase tracking-wider">
+                  {storeInfo.isOpenNow ? "Buka Sekarang" : "Tutup"}
+                </span>
+              </div>
+
+              {/* FITUR BARU: RATING BADGE DI HERO */}
+              <Link href="/story" className="animate-in fade-in zoom-in">
+                <div className="px-3 py-1.5 rounded-full flex items-center gap-1.5 border border-yellow-500/30 bg-yellow-500/10 text-yellow-400 backdrop-blur-md hover:bg-yellow-500/20 transition-colors active:scale-95 cursor-pointer">
+                  <Star size={12} className="fill-yellow-400" />
+                  <span className="text-[10px] font-bold">
+                    {storeInfo.ratingAvg}
+                  </span>
+                  <span className="text-[9px] opacity-70">
+                    ({storeInfo.ratingCount})
+                  </span>
+                </div>
+              </Link>
             </div>
+
             {storeInfo.open_hour && (
               <div className="text-[10px] text-zinc-300 bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 font-medium animate-in fade-in">
                 {storeInfo.open_hour.slice(0, 5)} -{" "}

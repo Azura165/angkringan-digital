@@ -29,6 +29,11 @@ import {
   Loader2,
   XCircle,
   FileWarning,
+  RefreshCw,
+  Trash2,
+  Copy,
+  Zap,
+  Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -65,7 +70,7 @@ interface Order {
   items?: OrderItem[];
 }
 
-const ITEMS_PER_PAGE = 15; // Limit data agar ringan
+const ITEMS_PER_PAGE = 20;
 
 const formatRupiah = (num: number) =>
   new Intl.NumberFormat("id-ID", {
@@ -96,20 +101,26 @@ const OrderCard = memo(
     kitchenMode: boolean;
     isProcessing: boolean;
   }) => {
-    const statusColor = {
-      pending: "border-yellow-500/50 bg-yellow-500/5 hover:bg-yellow-500/10",
-      cooking: "border-blue-500/50 bg-blue-500/5 hover:bg-blue-500/10",
-      ready: "border-green-500/50 bg-green-500/5 hover:bg-green-500/10",
-      completed: "border-zinc-800 bg-zinc-900 opacity-75",
-      cancelled: "border-red-900/50 bg-red-900/10 opacity-60",
-    }[order.status];
+    const statusConfig = {
+      pending: {
+        color: "border-yellow-500/50 bg-yellow-500/5",
+        badge: "warning",
+      },
+      cooking: { color: "border-blue-500/50 bg-blue-500/5", badge: "info" },
+      ready: { color: "border-green-500/50 bg-green-500/5", badge: "success" },
+      completed: {
+        color: "border-zinc-800 bg-zinc-900 opacity-60",
+        badge: "secondary",
+      },
+      cancelled: {
+        color: "border-red-900/50 bg-red-900/10 opacity-60",
+        badge: "destructive",
+      },
+    }[order.status] || { color: "border-zinc-800", badge: "secondary" };
 
     const minutesAgo = getTimeAgo(order.created_at);
     const isLate =
-      order.status !== "completed" &&
-      order.status !== "cancelled" &&
-      minutesAgo > 30;
-
+      ["pending", "cooking"].includes(order.status) && minutesAgo > 15;
     const progressPercent = Math.min((minutesAgo / 45) * 100, 100);
     const progressColor =
       minutesAgo < 15
@@ -118,13 +129,19 @@ const OrderCard = memo(
           ? "bg-yellow-500"
           : "bg-red-500";
 
+    const handleCopyID = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(order.order_code || `#${order.id}`);
+      toast.success("ID Order Disalin", { duration: 1500 });
+      if (navigator.vibrate) navigator.vibrate(50);
+    };
+
     return (
       <div
         onClick={() => onDetail(order)}
-        className={`relative rounded-2xl border cursor-pointer transition-all duration-300 active:scale-[0.98] flex flex-col justify-between h-full group overflow-hidden ${statusColor} ${kitchenMode ? "p-5" : "p-4"}`}
+        className={`relative rounded-2xl border cursor-pointer transition-all duration-300 hover:scale-[1.01] active:scale-[0.98] flex flex-col justify-between h-full group overflow-hidden ${statusConfig.color} ${kitchenMode ? "p-5" : "p-4"}`}
       >
-        {/* Visual Timer Bar */}
-        {order.status !== "completed" && order.status !== "cancelled" && (
+        {["pending", "cooking", "ready"].includes(order.status) && (
           <div className="absolute bottom-0 left-0 h-1 w-full bg-zinc-800/50">
             <div
               className={`h-full ${progressColor} transition-all duration-1000 ease-out`}
@@ -132,13 +149,15 @@ const OrderCard = memo(
             />
           </div>
         )}
-
-        {/* Header */}
         <div className="flex justify-between items-start mb-3">
           <div className="flex flex-col">
-            <div className="flex items-center gap-1.5 mb-0.5">
-              <span className="text-[10px] font-mono font-bold tracking-wider text-orange-500 bg-orange-500/10 px-1.5 rounded">
-                {order.order_code || `#${order.id}`}
+            <div
+              onClick={handleCopyID}
+              className="flex items-center gap-1.5 mb-0.5 cursor-copy active:opacity-50"
+            >
+              <span className="text-[10px] font-mono font-bold tracking-wider text-orange-500 bg-orange-500/10 px-1.5 rounded flex items-center gap-1">
+                {order.order_code || `#${order.id}`}{" "}
+                <Copy size={8} className="opacity-50" />
               </span>
               {order.table_number === "Takeaway" ? (
                 <Smartphone size={10} className="text-zinc-500" />
@@ -166,43 +185,43 @@ const OrderCard = memo(
             </div>
           </div>
           <Badge
-            variant={
-              order.status === "pending"
-                ? "warning"
-                : order.status === "ready"
-                  ? "success"
-                  : "secondary"
-            }
+            variant={order.status === "pending" ? "destructive" : "secondary"}
+            className="uppercase text-[10px]"
           >
-            {order.status.toUpperCase()}
+            {order.status}
           </Badge>
         </div>
-
-        {/* Items Preview */}
         <div
-          className={`flex-1 space-y-1.5 mb-4 border-t border-dashed border-white/10 pt-3 ${kitchenMode ? "text-sm" : "text-xs"}`}
+          className={`flex-1 space-y-2 mb-4 border-t border-dashed border-white/10 pt-3 ${kitchenMode ? "text-sm" : "text-xs"}`}
         >
-          {order.items?.slice(0, kitchenMode ? 10 : 3).map((item, i) => (
-            <div key={i} className="flex justify-between text-zinc-300">
-              <span className="flex gap-2">
-                <span
-                  className={`font-bold ${kitchenMode ? "text-orange-400" : "text-zinc-500"}`}
-                >
-                  x{item.qty}
+          {order.items?.slice(0, kitchenMode ? 8 : 3).map((item, i) => (
+            <div key={i} className="flex flex-col">
+              <div className="flex justify-between text-zinc-300">
+                <span className="flex gap-2">
+                  <span
+                    className={`font-bold ${kitchenMode ? "text-orange-400" : "text-zinc-500"}`}
+                  >
+                    x{item.qty}
+                  </span>
+                  <span className="line-clamp-1">{item.menu_name}</span>
                 </span>
-                <span className="line-clamp-1">{item.menu_name}</span>
-              </span>
+              </div>
+              {item.note && (
+                <div className="ml-6 text-[10px] text-zinc-500 italic flex items-center gap-1">
+                  <span className="bg-zinc-950/50 px-1.5 rounded border border-white/5">
+                    📝 {item.note}
+                  </span>
+                </div>
+              )}
             </div>
           ))}
-          {!kitchenMode && (order.items?.length || 0) > 3 && (
+          {(order.items?.length || 0) > (kitchenMode ? 8 : 3) && (
             <p className="text-[10px] text-zinc-500 italic">
-              + {(order.items?.length || 0) - 3} lainnya...
+              + {(order.items?.length || 0) - (kitchenMode ? 8 : 3)} lainnya...
             </p>
           )}
         </div>
-
-        {/* Footer */}
-        <div className="mt-auto relative z-10">
+        <div className="mt-auto relative z-10 pb-1">
           {!kitchenMode && (
             <div className="flex justify-between items-center mb-3">
               <p className="font-black text-white text-base">
@@ -220,13 +239,12 @@ const OrderCard = memo(
               </div>
             </div>
           )}
-
           <div className="flex gap-2">
             {order.status === "pending" && (
               <Button
                 disabled={isProcessing}
                 size={kitchenMode ? "lg" : "sm"}
-                className="w-full bg-blue-600 hover:bg-blue-500 font-bold transition-colors"
+                className="w-full bg-blue-600 hover:bg-blue-500 font-bold shadow-lg shadow-blue-900/20"
                 onClick={(e) => {
                   e.stopPropagation();
                   onUpdateStatus(order.id, "cooking");
@@ -239,7 +257,7 @@ const OrderCard = memo(
               <Button
                 disabled={isProcessing}
                 size={kitchenMode ? "lg" : "sm"}
-                className="w-full bg-orange-600 hover:bg-orange-500 font-bold transition-colors"
+                className="w-full bg-orange-600 hover:bg-orange-500 font-bold shadow-lg shadow-orange-900/20"
                 onClick={(e) => {
                   e.stopPropagation();
                   onUpdateStatus(order.id, "ready");
@@ -252,7 +270,7 @@ const OrderCard = memo(
               <Button
                 disabled={isProcessing}
                 size={kitchenMode ? "lg" : "sm"}
-                className="w-full bg-green-600 hover:bg-green-500 font-bold transition-colors"
+                className="w-full bg-green-600 hover:bg-green-500 font-bold shadow-lg shadow-green-900/20"
                 onClick={(e) => {
                   e.stopPropagation();
                   onUpdateStatus(order.id, "completed", true);
@@ -275,6 +293,7 @@ export default function AdminOrdersPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isConnected, setIsConnected] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
@@ -287,29 +306,65 @@ export default function AdminOrdersPage() {
   const [isMuted, setIsMuted] = useState(false);
   const [kitchenMode, setKitchenMode] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
-
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // SOLUSI: Simpan isMuted di Ref agar tidak mentrigger re-subscription
+  const isMutedRef = useRef(isMuted);
 
   useEffect(() => {
-    const savedMute = localStorage.getItem("admin_mute");
-    const savedKitchen = localStorage.getItem("admin_kitchen");
-    if (savedMute) setIsMuted(JSON.parse(savedMute));
-    if (savedKitchen) setKitchenMode(JSON.parse(savedKitchen));
+    if (typeof window !== "undefined") {
+      const savedMute = localStorage.getItem("admin_mute");
+      const savedKitchen = localStorage.getItem("admin_kitchen");
+      if (savedMute) {
+        const muted = JSON.parse(savedMute);
+        setIsMuted(muted);
+        isMutedRef.current = muted;
+      }
+      if (savedKitchen) setKitchenMode(JSON.parse(savedKitchen));
+      audioRef.current = new Audio("/sounds/notification.mp3");
+
+      if ("wakeLock" in navigator) {
+        // @ts-ignore
+        navigator.wakeLock
+          .request("screen")
+          .catch((e) => console.log("Wake Lock Error:", e));
+      }
+    }
   }, []);
 
+  // Update Ref saat state berubah
+  useEffect(() => {
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
+
   const toggleMute = () => {
-    setIsMuted(!isMuted);
-    localStorage.setItem("admin_mute", JSON.stringify(!isMuted));
+    const newMuted = !isMuted;
+    setIsMuted(newMuted);
+    localStorage.setItem("admin_mute", JSON.stringify(newMuted));
+
+    if (!newMuted && audioRef.current) {
+      audioRef.current.volume = 0;
+      audioRef.current
+        .play()
+        .then(() => {
+          audioRef.current!.volume = 1;
+          toast.success("Suara Diaktifkan 🔊");
+        })
+        .catch(() => toast.error("Klik lagi untuk aktifkan suara"));
+    } else {
+      toast("Suara Dimatikan 🔇");
+    }
   };
+
   const toggleKitchen = () => {
     setKitchenMode(!kitchenMode);
     localStorage.setItem("admin_kitchen", JSON.stringify(!kitchenMode));
   };
 
-  // --- FETCH ORDERS ---
   const fetchOrders = useCallback(
     async (reset = false) => {
       if (reset) {
@@ -323,73 +378,70 @@ export default function AdminOrdersPage() {
       const from = reset ? 0 : (page + 1) * ITEMS_PER_PAGE;
       const to = from + ITEMS_PER_PAGE - 1;
 
-      const { data: ordersData, error } = await supabase
-        .from("orders")
-        .select(`*, order_items(*)`)
-        .order("created_at", { ascending: false })
-        .range(from, to);
-
-      if (!error && ordersData) {
-        const formatted = ordersData.map((o: any) => ({
-          ...o,
-          items: o.order_items,
-        }));
-
-        if (reset) setOrders(formatted);
-        else {
-          setOrders((prev) => {
-            const existingIds = new Set(prev.map((o) => o.id));
-            return [
-              ...prev,
-              ...formatted.filter((o) => !existingIds.has(o.id)),
-            ];
-          });
-          setPage((prev) => prev + 1);
+      try {
+        const { data, error } = await supabase
+          .from("orders")
+          .select(`*, order_items(*)`)
+          .order("created_at", { ascending: false })
+          .range(from, to);
+        if (error) throw error;
+        if (data) {
+          const formatted = data.map((o: any) => ({
+            ...o,
+            items: o.order_items,
+          }));
+          if (reset) setOrders(formatted);
+          else
+            setOrders((prev) => {
+              const existingIds = new Set(prev.map((o) => o.id));
+              return [
+                ...prev,
+                ...formatted.filter((o) => !existingIds.has(o.id)),
+              ];
+            });
+          if (data.length < ITEMS_PER_PAGE) setHasMore(false);
+          setIsConnected(true);
         }
-
-        if (ordersData.length < ITEMS_PER_PAGE) setHasMore(false);
-        setIsConnected(true);
-      } else {
+      } catch (err) {
         setIsConnected(false);
-        toast.error("Gagal koneksi ke database.");
+        toast.error("Gagal sync data.");
+      } finally {
+        setIsLoading(false);
+        setLoadingMore(false);
+        setIsRefreshing(false);
       }
-
-      setIsLoading(false);
-      setLoadingMore(false);
     },
     [page],
   );
 
-  // --- AUTO CANCEL (>24H) ---
-  const autoCancelOldOrders = async () => {
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    await supabase
-      .from("orders")
-      .update({ status: "cancelled" })
-      .eq("status", "pending")
-      .lt("created_at", yesterday);
+  const handleManualRefresh = () => {
+    setIsRefreshing(true);
+    fetchOrders(true);
+    if (navigator.vibrate) navigator.vibrate(50);
+    toast("Data diperbarui", {
+      icon: <RefreshCw className="animate-spin h-4 w-4" />,
+      duration: 2000,
+    }); // 2 Detik
   };
 
-  // --- REALTIME SETUP ---
+  // --- REALTIME LISTENER (FIXED: Dependency removed) ---
   useEffect(() => {
     fetchOrders(true);
-    autoCancelOldOrders();
-    audioRef.current = new Audio("/sounds/notification.mp3");
-
-    // LISTEN ALL EVENTS (INSERT + UPDATE)
     const channel = supabase
-      .channel("realtime-orders-admin")
+      .channel("admin-orders-realtime")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "orders" },
         async (payload) => {
           if (payload.eventType === "INSERT") {
-            // New Order
-            if (!isMuted && audioRef.current)
+            // Gunakan REF, bukan state langsung, agar useEffect tidak restart
+            if (!isMutedRef.current && audioRef.current)
               audioRef.current.play().catch(() => {});
+            if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
             toast("Order Masuk!", {
               description: `Meja ${payload.new.table_number}`,
               icon: "🔔",
+              style: { background: "#10B981", color: "white" },
             });
             const { data } = await supabase
               .from("orders")
@@ -402,12 +454,13 @@ export default function AdminOrdersPage() {
                 ...prev,
               ]);
           } else if (payload.eventType === "UPDATE") {
-            // Update Status (Sync antar admin/device)
             setOrders((prev) =>
               prev.map((o) =>
                 o.id === payload.new.id ? { ...o, ...payload.new } : o,
               ),
             );
+            if (payload.new.status === "cancelled")
+              toast(`Order #${payload.new.id} Dibatalkan`, { icon: "🚫" });
           }
         },
       )
@@ -416,18 +469,15 @@ export default function AdminOrdersPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, []); // DEPENDENCY KOSONG = KONEKSI STABIL
 
-  // --- ACTIONS ---
   const handleUpdateStatus = async (
     id: number,
     newStatus: string,
     isPayment = false,
   ) => {
     setIsProcessing(true);
-    const oldOrders = [...orders];
-
-    // Optimistic Update
+    const originalOrders = [...orders];
     setOrders((prev) =>
       prev.map((o) =>
         o.id === id
@@ -439,26 +489,24 @@ export default function AdminOrdersPage() {
           : o,
       ),
     );
-
+    if (["completed", "cancelled"].includes(newStatus)) setIsDetailOpen(false);
     const updatePayload: any = { status: newStatus };
     if (isPayment) updatePayload.payment_status = "paid";
-
     const { error } = await supabase
       .from("orders")
       .update(updatePayload)
       .eq("id", id);
-
     if (error) {
-      setOrders(oldOrders); // Rollback
-      console.error("Update Error:", error);
-      toast.error("Gagal update status. Cek izin DB.");
+      setOrders(originalOrders);
+      toast.error("Gagal update status.");
     } else {
       toast.success(`Status: ${newStatus.toUpperCase()}`);
-      if (["completed", "cancelled"].includes(newStatus))
-        setIsDetailOpen(false);
+      if (navigator.vibrate) navigator.vibrate(50);
     }
     setIsProcessing(false);
   };
+
+  const handlePrint = () => window.print();
 
   const filteredOrders = useMemo(() => {
     let data = orders;
@@ -482,7 +530,6 @@ export default function AdminOrdersPage() {
           (o.order_code && o.order_code.toLowerCase().includes(q)),
       );
     }
-
     if (activeTab === "active") {
       data.sort((a, b) => {
         const priority: Record<string, number> = {
@@ -507,40 +554,47 @@ export default function AdminOrdersPage() {
     return Object.entries(summary).sort(([, a], [, b]) => b - a);
   }, [orders]);
 
-  const handlePrint = () => {
-    window.print();
-  };
   const stats = useMemo(() => {
     const today = new Date().toISOString().split("T")[0];
-    const todaysOrders = orders.filter(
+    const todays = orders.filter(
       (o) => o.created_at.startsWith(today) && o.status !== "cancelled",
     );
     return {
-      revenue: todaysOrders.reduce((acc, curr) => acc + curr.total_price, 0),
-      count: todaysOrders.length,
+      revenue: todays.reduce((acc, curr) => acc + curr.total_price, 0),
+      count: todays.length,
     };
   }, [orders]);
 
   return (
-    <div className="space-y-6 pb-24 animate-in fade-in slide-in-from-bottom-2 duration-500">
+    <div
+      className="space-y-6 pb-24 animate-in fade-in slide-in-from-bottom-2 duration-500"
+      ref={containerRef}
+    >
       <div className="sticky top-0 z-30 bg-zinc-950/90 backdrop-blur-xl border-b border-white/5 pb-4 pt-2 -mx-4 px-4 md:mx-0 md:px-0 md:pt-0">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
           <div>
             <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-              Riwayat Order
+              <Zap size={20} className="text-orange-500 fill-orange-500" />{" "}
+              Monitoring
               <div
                 className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] border transition-colors ${isConnected ? "bg-green-500/10 border-green-500/30 text-green-500" : "bg-red-500/10 border-red-500/30 text-red-500"}`}
               >
                 {isConnected ? <Wifi size={10} /> : <WifiOff size={10} />}{" "}
-                {isConnected ? "Live" : "Offline"}
+                {isConnected ? "Live" : "Putus"}
               </div>
+              <button
+                onClick={handleManualRefresh}
+                className={`ml-2 p-1.5 rounded-full hover:bg-zinc-800 transition-colors ${isRefreshing ? "animate-spin" : ""}`}
+              >
+                <RefreshCw size={16} className="text-zinc-400" />
+              </button>
             </h2>
             <div className="flex flex-wrap gap-3 text-[10px] text-zinc-500 mt-1">
               <span>
                 🗓️ Hari ini: <b>{stats.count}</b> Order
               </span>
               <span className="text-green-500">
-                💵 Omzet: {formatRupiah(stats.revenue)}
+                💵 {formatRupiah(stats.revenue)}
               </span>
             </div>
           </div>
@@ -552,9 +606,9 @@ export default function AdminOrdersPage() {
               className="border-zinc-800 text-zinc-300 relative"
               title="Rekap Dapur"
             >
-              <ListChecks size={16} />{" "}
+              <ListChecks size={16} className="mr-2" /> Dapur
               {kitchenSummary.length > 0 && (
-                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-ping" />
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
               )}
             </Button>
             <Button
@@ -562,7 +616,6 @@ export default function AdminOrdersPage() {
               variant="outline"
               onClick={toggleMute}
               className={`border-zinc-800 ${isMuted ? "text-red-500" : "text-green-500"}`}
-              title={isMuted ? "Suara Mati" : "Suara Hidup"}
             >
               {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
             </Button>
@@ -571,7 +624,6 @@ export default function AdminOrdersPage() {
               variant="outline"
               onClick={toggleKitchen}
               className={`border-zinc-800 ${kitchenMode ? "bg-orange-500/20 text-orange-500 border-orange-500" : "text-zinc-400"}`}
-              title="Mode Dapur"
             >
               <Eye size={16} className="mr-2" />{" "}
               {kitchenMode ? "Normal" : "Dapur"}
@@ -691,13 +743,14 @@ export default function AdminOrdersPage() {
         </div>
       )}
 
-      {hasMore && !searchQuery && (
+      {/* PAGINATION: LOAD MORE (Mobile Friendly) */}
+      {hasMore && !searchQuery && filteredOrders.length >= ITEMS_PER_PAGE && (
         <div className="flex justify-center pt-6">
           <Button
             variant="outline"
             onClick={() => fetchOrders(false)}
             disabled={loadingMore}
-            className="bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white"
+            className="bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white w-full sm:w-auto"
           >
             {loadingMore ? (
               <Loader2 className="animate-spin mr-2" size={16} />
@@ -709,6 +762,7 @@ export default function AdminOrdersPage() {
         </div>
       )}
 
+      {/* --- DETAIL MODAL --- */}
       <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
         <DialogContent className="bg-zinc-950 border-zinc-800 text-white max-w-md max-h-[90vh] overflow-y-auto print:bg-white print:text-black shadow-2xl shadow-black/90">
           <DialogHeader className="border-b border-dashed border-zinc-800 pb-4">
@@ -771,9 +825,9 @@ export default function AdminOrdersPage() {
                         {item.menu_name}
                       </span>
                       {item.note && (
-                        <p className="text-[10px] text-zinc-500 italic mt-0.5 bg-zinc-900 px-2 py-0.5 rounded w-fit">
+                        <div className="text-[10px] text-zinc-500 italic">
                           📝 {item.note}
-                        </p>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -785,7 +839,7 @@ export default function AdminOrdersPage() {
             </div>
             <div className="bg-orange-500/10 border border-orange-500/20 p-4 rounded-xl flex justify-between items-center print:border-black print:bg-transparent">
               <span className="font-bold text-orange-200 print:text-black">
-                TOTAL
+                TOTAL TAGIHAN
               </span>
               <span className="font-black text-2xl text-orange-500 print:text-black">
                 {selectedOrder && formatRupiah(selectedOrder.total_price)}
@@ -844,20 +898,60 @@ export default function AdminOrdersPage() {
                   <Printer size={16} className="mr-2" /> Cetak Struk
                 </Button>
               )}
-              {selectedOrder?.status !== "cancelled" &&
-                selectedOrder?.status !== "completed" && (
-                  <Button
-                    variant="destructive"
-                    onClick={() =>
-                      selectedOrder &&
-                      handleUpdateStatus(selectedOrder.id, "cancelled")
-                    }
-                    className="flex-1 bg-red-900/30 text-red-400 hover:bg-red-900 border border-red-900"
-                  >
-                    Batalkan
-                  </Button>
-                )}
+              <Button
+                variant="destructive"
+                onClick={() =>
+                  selectedOrder &&
+                  handleUpdateStatus(selectedOrder.id, "cancelled")
+                }
+                className="flex-1 bg-red-900/30 text-red-400 hover:bg-red-900 border border-red-900"
+              >
+                Batalkan/Hapus
+              </Button>
             </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* --- KITCHEN SUMMARY MODAL --- */}
+      <Dialog open={showSummary} onOpenChange={setShowSummary}>
+        <DialogContent className="bg-zinc-950 border-zinc-800 text-white max-w-sm rounded-2xl shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ListChecks size={20} className="text-orange-500" /> Rekap Dapur
+            </DialogTitle>
+            <DialogDescription className="text-xs text-zinc-400">
+              Total item yang HARUS dimasak sekarang.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2 max-h-[60vh] overflow-y-auto">
+            {kitchenSummary.length > 0 ? (
+              kitchenSummary.map(([name, qty], idx) => (
+                <div
+                  key={idx}
+                  className="flex justify-between items-center bg-zinc-900/50 p-3 rounded-lg border border-zinc-800"
+                >
+                  <span className="font-medium text-sm text-zinc-200">
+                    {name}
+                  </span>
+                  <Badge className="bg-orange-600 hover:bg-orange-700 text-white text-sm px-3 py-1">
+                    {qty}
+                  </Badge>
+                </div>
+              ))
+            ) : (
+              <p className="text-center text-zinc-500 text-xs py-4 border border-dashed border-zinc-800 rounded-lg">
+                Dapur aman terkendali. 😴
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={() => setShowSummary(false)}
+              className="w-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700"
+            >
+              Tutup
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
