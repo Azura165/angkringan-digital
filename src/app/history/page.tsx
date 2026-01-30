@@ -59,7 +59,7 @@ interface Order {
 }
 
 const ITEMS_PER_PAGE = 10;
-const CACHE_KEY = "history_orders_final_v10";
+const CACHE_KEY = "history_orders_final_v11"; // Versi cache baru
 
 // --- CONFIG ---
 const getStatusConfig = (status: string) => {
@@ -406,25 +406,30 @@ export default function HistoryPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [customerName, setCustomerName] = useState<string | null>(null);
+
   const [page, setPage] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
+  const [hasMore, setHasMore] = useState(false); // OPTIMASI: Default false agar tidak flicker
   const [loadingMore, setLoadingMore] = useState(false);
+
   const [reviewOrder, setReviewOrder] = useState<Order | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // FETCH DATA
   const fetchHistory = useCallback(
     async (name: string, reset = false) => {
       if (reset) {
         setIsRefreshing(true);
         setPage(0);
-        setHasMore(true);
+        // Jangan setHasMore(true) di sini dulu, biarkan logic data yang menentukan
       } else {
         setLoadingMore(true);
       }
+
       const currentFrom = reset ? 0 : (page + 1) * ITEMS_PER_PAGE;
       const currentTo = currentFrom + ITEMS_PER_PAGE - 1;
+
       const { data, error } = await supabase
         .from("orders")
         .select("*, order_items(*)")
@@ -432,6 +437,7 @@ export default function HistoryPage() {
         .eq("is_visible_to_user", true)
         .order("created_at", { ascending: false })
         .range(currentFrom, currentTo);
+
       if (!error && data) {
         const mappedOrders = data.map((o: any) => ({
           id: o.id,
@@ -447,13 +453,21 @@ export default function HistoryPage() {
             note: i.note,
           })),
         }));
+
         if (reset) {
           setOrders(mappedOrders);
           sessionStorage.setItem(CACHE_KEY, JSON.stringify(mappedOrders));
         } else {
           setOrders((prev) => [...prev, ...mappedOrders]);
         }
-        if (data.length < ITEMS_PER_PAGE) setHasMore(false);
+
+        // LOGIC ANTI-FLICKER:
+        // Jika data yang didapat KURANG dari limit (misal dapat 1, limit 10), berarti sudah habis.
+        if (data.length < ITEMS_PER_PAGE) {
+          setHasMore(false);
+        } else {
+          setHasMore(true);
+        }
       }
       setIsLoading(false);
       setIsRefreshing(false);
@@ -465,16 +479,28 @@ export default function HistoryPage() {
   useEffect(() => {
     const name = localStorage.getItem("customer_name");
     setCustomerName(name);
+
     if (name) {
+      // 1. STRATEGI CACHE PINTAR
       const cachedData = sessionStorage.getItem(CACHE_KEY);
       if (cachedData) {
-        setOrders(JSON.parse(cachedData));
+        const parsedData = JSON.parse(cachedData);
+        setOrders(parsedData);
+
+        // Cek langsung dari cache: Apakah datanya sedikit? Kalau iya, matikan tombol load more
+        if (parsedData.length < ITEMS_PER_PAGE) {
+          setHasMore(false);
+        } else {
+          setHasMore(true);
+        }
+
         setIsLoading(false);
-        fetchHistory(name, true);
+        fetchHistory(name, true); // Revalidate background
       } else {
         fetchHistory(name, true);
       }
 
+      // 2. REALTIME
       const channel = supabase
         .channel("public:orders-history")
         .on(
@@ -537,34 +563,24 @@ export default function HistoryPage() {
     return { totalSpent, totalOrders, level, Icon, color };
   }, [orders]);
 
-  // --- REORDER LOGIC (ROBUST & SAFE) ---
+  // --- REORDER LOGIC (SAFE) ---
   const handleReorder = useCallback(
     async (items: any[]) => {
       toast("Mencari menu...", { icon: <Loader2 className="animate-spin" /> });
-
-      // 1. Siapkan Fallback (Jika DB masih error, kita tidak crash)
       const imageMap = new Map();
-
       try {
-        // 2. Coba fetch gambar (Jika kolom image ada)
-        // Kita gunakan select('*') agar lebih fleksibel kalau kolomnya beda
-        const { data: menuData, error } = await supabase
+        const { data: menuData } = await supabase
           .from("menu_items")
           .select("*");
-
-        if (!error && menuData) {
+        if (menuData)
           menuData.forEach((m: any) => {
-            // Simpan key lowercase agar pencarian case-insensitive
-            // Prioritaskan kolom 'image', lalu 'image_url', lalu 'img'
             const img = m.image || m.image_url || m.img || "";
             imageMap.set(m.name.trim().toLowerCase(), img);
           });
-        }
       } catch (e) {
-        console.warn("Skip image fetch:", e);
+        console.warn("Skip img fetch");
       }
 
-      // 3. Masukkan ke Cart (Dengan atau Tanpa Gambar)
       items.forEach((item) => {
         const cleanName = item.menu_name.trim().toLowerCase();
         addToCart({
@@ -575,7 +591,6 @@ export default function HistoryPage() {
           image: imageMap.get(cleanName) || "",
         } as any);
       });
-
       toast.success("Masuk keranjang! 🛒");
       router.push("/cart");
     },
