@@ -1,9 +1,9 @@
 "use client";
 
-import { memo, useState, useEffect } from "react";
+import { memo, useState } from "react"; // Hapus useEffect yang tidak perlu
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
-import { Plus, Star, Heart, Ban, ImageOff, Utensils } from "lucide-react";
+import { Plus, Star, Ban, ImageOff, Utensils } from "lucide-react";
 
 interface HomeProductCardProps {
   product: any;
@@ -21,20 +21,13 @@ export const HomeProductCard = memo(
     product,
     index,
     isHorizontal = false,
-    showLove = true,
     onClick,
     onQuickAdd,
-    onToggleFavorite,
-    isFavorite,
   }: HomeProductCardProps) => {
+    // KITA HAPUS isLoading STATE AGAR TIDAK FLICKER
     const [hasError, setHasError] = useState(false);
-    const [isLoading, setIsLoading] = useState(true);
 
-    useEffect(() => {
-      setHasError(false);
-      setIsLoading(true);
-    }, [product.image]);
-
+    // Cek URL Valid
     const isValidUrl =
       product.image &&
       typeof product.image === "string" &&
@@ -49,7 +42,7 @@ export const HomeProductCard = memo(
         ${!product.isAvailable ? "grayscale opacity-70 bg-zinc-900/20" : "bg-zinc-900/30 hover:bg-zinc-900/60 hover:border-white/5"}
         ${
           isHorizontal
-            ? "gap-4 p-3 rounded-2xl flex-row items-start bg-zinc-900/40" // LIST MODE (Paling Laris) - Padding lebih besar
+            ? "gap-4 p-3 rounded-2xl flex-row items-start bg-zinc-900/40" // LIST MODE (Paling Laris)
             : "flex-col rounded-[1.5rem] border-white/5 bg-zinc-900" // GRID MODE
         }
       `}
@@ -71,12 +64,12 @@ export const HomeProductCard = memo(
         ${isHorizontal ? "h-24 w-24 rounded-xl" : "w-full aspect-square"} 
         `}
         >
-          {/* Placeholder Background */}
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-700 bg-zinc-800">
+          {/* Background Placeholder (Hanya terlihat jika gambar belum load / error) */}
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-700 bg-zinc-800 -z-10">
             {hasError ? (
               <ImageOff size={20} className="opacity-50" />
             ) : (
-              <Utensils size={24} className="opacity-20 animate-pulse" />
+              <Utensils size={24} className="opacity-20" />
             )}
           </div>
 
@@ -86,17 +79,13 @@ export const HomeProductCard = memo(
               src={product.image}
               alt={product.name}
               fill
-              className={`object-cover transition-all duration-700 group-hover:scale-110 z-10 
-                ${isLoading ? "opacity-0 scale-95" : "opacity-100 scale-100"} 
-              `}
+              // FIX: Hapus class 'opacity-0' dan transisi loading manual
+              className="object-cover group-hover:scale-110 transition-transform duration-700 z-10"
               sizes={isHorizontal ? "100px" : "300px"}
               quality={75}
               loading="lazy"
-              onLoad={() => setIsLoading(false)}
-              onError={() => {
-                setHasError(true);
-                setIsLoading(false);
-              }}
+              decoding="async" // Agar load smooth
+              onError={() => setHasError(true)}
               unoptimized={product.image.startsWith("http")}
             />
           )}
@@ -123,7 +112,6 @@ export const HomeProductCard = memo(
               </h3>
             </div>
 
-            {/* --- UPDATE: Deskripsi Tampil di SEMUA MODE --- */}
             <p
               className={`text-[10px] text-zinc-500 mt-1 leading-relaxed ${isHorizontal ? "line-clamp-2" : "line-clamp-1"}`}
             >
@@ -166,6 +154,15 @@ export const HomeProductCard = memo(
           </div>
         </div>
       </div>
+    );
+  },
+  // Custom Compare Function agar tidak re-render jika props sama
+  (prev, next) => {
+    return (
+      prev.product.id === next.product.id &&
+      prev.product.image === next.product.image &&
+      prev.product.isAvailable === next.product.isAvailable &&
+      prev.product.price === next.product.price
     );
   },
 );

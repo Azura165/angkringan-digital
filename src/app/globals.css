@@ -143,3 +143,11 @@
   display: flex;
   animation: marquee 15s linear infinite;
 }
+/* Sembunyikan Scrollbar tapi tetap bisa scroll */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

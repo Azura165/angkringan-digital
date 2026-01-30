@@ -19,7 +19,7 @@ import {
   ArrowRight,
   ChevronLeft,
   ChevronRight,
-  Loader2,
+  ArrowUp,
 } from "lucide-react";
 import Link from "next/link";
 import { useState, useEffect, useCallback, useRef, useTransition } from "react";
@@ -31,7 +31,7 @@ import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-// Import Card
+// Import Card Optimized
 import { HomeProductCard } from "@/components/features/home/HomeProductCard";
 
 const ProductDetailModal = dynamic(
@@ -83,13 +83,14 @@ const GRADIENT_MAP: Record<string, string> = {
 };
 
 const CACHE_KEY_STORE = "store_config_cache";
-const CACHE_KEY_HOME_DATA = "home_data_cache_v1"; // Cache Key untuk Data Home
+const CACHE_KEY_HOME_DATA = "home_data_cache_v4"; // Bump version cache
 
 export default function Home() {
   const { addToCart } = useCart();
   const [isPending, startTransition] = useTransition();
 
-  // REFS
+  // REFS (Untuk Auto Scroll)
+  const topRef = useRef<HTMLDivElement>(null);
   const pedasRef = useRef<HTMLDivElement>(null);
   const segarRef = useRef<HTMLDivElement>(null);
   const kenyangRef = useRef<HTMLDivElement>(null);
@@ -121,134 +122,140 @@ export default function Home() {
   });
 
   // STATE UX
-  const [isLoading, setIsLoading] = useState(true);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [heroIndex, setHeroIndex] = useState(0);
   const [greeting, setGreeting] = useState("Halo");
   const [lastClickTime, setLastClickTime] = useState(0);
-  const [scrollProgress, setScrollProgress] = useState(0);
+  const [showScrollTop, setShowScrollTop] = useState(false); // Fitur Back to Top
   const [selectedProduct, setSelectedProduct] = useState<HomeMenuItem | null>(
     null,
   );
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // FETCH DATA FUNCTION
-  const fetchData = useCallback(
-    async (forceRefresh = false) => {
-      // 1. CEK CACHE DULU (Agar Instan)
-      if (!forceRefresh) {
-        const cachedHome = sessionStorage.getItem(CACHE_KEY_HOME_DATA);
-        if (cachedHome) {
-          try {
-            const parsed = JSON.parse(cachedHome);
-            if (parsed.recommendedItems)
-              setRecommendedItems(parsed.recommendedItems);
-            if (parsed.newItems) setNewItems(parsed.newItems);
-            if (parsed.promos) setPromos(parsed.promos);
-            if (parsed.pedasItems) setPedasItems(parsed.pedasItems);
-            if (parsed.segarItems) setSegarItems(parsed.segarItems);
-            if (parsed.kenyangItems) setKenyangItems(parsed.kenyangItems);
-            if (parsed.cemilanItems) setCemilanItems(parsed.cemilanItems);
-
-            setIsLoading(false); // Stop loading karena data cache sudah tampil
-          } catch (e) {
-            console.error("Cache parse error", e);
-          }
+  // FETCH DATA (OPTIMIZED LIMIT 7)
+  const fetchData = useCallback(async (forceRefresh = false) => {
+    // 1. Cek Cache
+    if (!forceRefresh && typeof window !== "undefined") {
+      const cachedHome = sessionStorage.getItem(CACHE_KEY_HOME_DATA);
+      if (cachedHome) {
+        try {
+          const parsed = JSON.parse(cachedHome);
+          setRecommendedItems(parsed.recommendedItems || []);
+          setNewItems(parsed.newItems || []);
+          setPromos(parsed.promos || []);
+          setPedasItems(parsed.pedasItems || []);
+          setSegarItems(parsed.segarItems || []);
+          setKenyangItems(parsed.kenyangItems || []);
+          setCemilanItems(parsed.cemilanItems || []);
+          setIsInitialLoading(false);
+        } catch (e) {
+          console.error("Cache error", e);
         }
       }
+    }
 
-      // Jika data cache kosong atau dipaksa refresh, set loading
-      if (!sessionStorage.getItem(CACHE_KEY_HOME_DATA) || forceRefresh) {
-        setIsLoading(true);
-      }
+    try {
+      // 2. Fetch DB (LIMIT 7 sesuai request)
+      const LIMIT_COUNT = 7;
 
-      try {
-        // Delay sedikit jika refresh manual biar kerasa 'loading'-nya (UX)
-        if (forceRefresh) await new Promise((r) => setTimeout(r, 800));
+      const [
+        recRes, // Paling Laris
+        newRes, // Baru
+        promoRes,
+        configRes,
+        pedasRes, // Tag: Pedas
+        segarRes, // Kategori: Minuman
+        kenyangRes, // Tag: Berat
+        cemilanRes, // Kategori: Cemilan
+      ] = await Promise.all([
+        supabase
+          .from("menu_items")
+          .select("*")
+          .eq("is_available", true)
+          .eq("is_recommended", true)
+          .limit(LIMIT_COUNT),
+        supabase
+          .from("menu_items")
+          .select("*")
+          .eq("is_available", true)
+          .order("id", { ascending: false })
+          .limit(LIMIT_COUNT),
+        supabase.from("promos").select("*").eq("is_active", true),
+        supabase.from("store_config").select("*").single(),
 
-        const [
-          recRes,
-          newRes,
-          promoRes,
-          configRes,
-          pedasRes,
-          segarRes,
-          kenyangRes,
-          cemilanRes,
-        ] = await Promise.all([
-          supabase
-            .from("menu_items")
-            .select("*")
-            .eq("is_recommended", true)
-            .limit(5),
-          supabase
-            .from("menu_items")
-            .select("*")
-            .order("created_at", { ascending: false })
-            .limit(6),
-          supabase.from("promos").select("*").eq("is_active", true),
-          supabase.from("store_config").select("*").single(),
-          supabase
-            .from("menu_items")
-            .select("*")
-            .or("description.ilike.%pedas%,name.ilike.%pedas%")
-            .limit(6),
-          supabase.from("menu_items").select("*").eq("category_id", 3).limit(6),
-          supabase.from("menu_items").select("*").eq("category_id", 2).limit(6),
-          supabase.from("menu_items").select("*").eq("category_id", 4).limit(6),
-        ]);
+        supabase
+          .from("menu_items")
+          .select("*")
+          .eq("is_available", true)
+          .contains("tags", ["Pedas"])
+          .limit(LIMIT_COUNT),
+        supabase
+          .from("menu_items")
+          .select("*")
+          .eq("is_available", true)
+          .eq("category_id", 3)
+          .limit(LIMIT_COUNT),
+        supabase
+          .from("menu_items")
+          .select("*")
+          .eq("is_available", true)
+          .contains("tags", ["Berat"])
+          .limit(LIMIT_COUNT),
+        supabase
+          .from("menu_items")
+          .select("*")
+          .eq("is_available", true)
+          .eq("category_id", 4)
+          .limit(LIMIT_COUNT),
+      ]);
 
-        // Helper format
-        const fmt = (data: any[]) => (data ? data.map(formatMenuItem) : []);
+      const fmt = (data: any[]) => (data ? data.map(formatMenuItem) : []);
 
-        const newData = {
-          recommendedItems: fmt(recRes.data || []),
-          newItems: fmt(newRes.data || []),
-          promos: promoRes.data || [],
-          pedasItems: fmt(pedasRes.data || []),
-          segarItems: fmt(segarRes.data || []),
-          kenyangItems: fmt(kenyangRes.data || []),
-          cemilanItems: fmt(cemilanRes.data || []),
+      const newData = {
+        recommendedItems: fmt(recRes.data || []),
+        newItems: fmt(newRes.data || []),
+        promos: promoRes.data || [],
+        pedasItems: fmt(pedasRes.data || []),
+        segarItems: fmt(segarRes.data || []),
+        kenyangItems: fmt(kenyangRes.data || []),
+        cemilanItems: fmt(cemilanRes.data || []),
+      };
+
+      setRecommendedItems(newData.recommendedItems);
+      setNewItems(newData.newItems);
+      setPromos(newData.promos);
+      setPedasItems(newData.pedasItems);
+      setSegarItems(newData.segarItems);
+      setKenyangItems(newData.kenyangItems);
+      setCemilanItems(newData.cemilanItems);
+
+      sessionStorage.setItem(CACHE_KEY_HOME_DATA, JSON.stringify(newData));
+
+      if (configRes.data) {
+        const now = new Date();
+        const currentTime = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`;
+        const newStoreInfo = {
+          name: configRes.data.store_name || "Angkringan Mas Radit",
+          address: configRes.data.address || "Jl. Malioboro No. 1",
+          open_hour: configRes.data.open_hour || "17:00",
+          close_hour: configRes.data.close_hour || "23:59",
+          running_text: configRes.data.running_text || "Selamat Datang!",
+          isOpenNow:
+            currentTime >= (configRes.data.open_hour || "17:00") &&
+            currentTime <= (configRes.data.close_hour || "23:59"),
         };
-
-        // Set State dengan data baru
-        setRecommendedItems(newData.recommendedItems);
-        setNewItems(newData.newItems);
-        setPromos(newData.promos);
-        setPedasItems(newData.pedasItems);
-        setSegarItems(newData.segarItems);
-        setKenyangItems(newData.kenyangItems);
-        setCemilanItems(newData.cemilanItems);
-
-        // SIMPAN KE CACHE
-        sessionStorage.setItem(CACHE_KEY_HOME_DATA, JSON.stringify(newData));
-
-        if (configRes.data) {
-          const now = new Date();
-          const currentTime = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`;
-          const newStoreInfo = {
-            name: configRes.data.store_name || "Angkringan Mas Radit",
-            address: configRes.data.address || "Jl. Malioboro No. 1",
-            open_hour: configRes.data.open_hour || "17:00",
-            close_hour: configRes.data.close_hour || "23:59",
-            running_text: configRes.data.running_text || "Selamat Datang!",
-            isOpenNow:
-              currentTime >= (configRes.data.open_hour || "17:00") &&
-              currentTime <= (configRes.data.close_hour || "23:59"),
-          };
-          setStoreInfo(newStoreInfo);
-          sessionStorage.setItem(CACHE_KEY_STORE, JSON.stringify(newStoreInfo));
-        }
-      } catch (err) {
-        console.error("Fetch Error:", err);
-        if (forceRefresh) toast.error("Gagal update data");
-      } finally {
-        setIsLoading(false);
+        setStoreInfo(newStoreInfo);
+        sessionStorage.setItem(CACHE_KEY_STORE, JSON.stringify(newStoreInfo));
       }
-    },
-    [storeInfo.open_hour],
-  );
+    } catch (err) {
+      console.error("Fetch Error:", err);
+    } finally {
+      setIsInitialLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
+    // Logic Sapaan
     const h = new Date().getHours();
     setGreeting(
       h < 11
@@ -260,12 +267,17 @@ export default function Home() {
             : "Selamat Malam 🌙",
     );
 
+    // Logic Back to Top Button
     const handleScroll = () => {
-      const scroll = `${document.documentElement.scrollTop / (document.documentElement.scrollHeight - document.documentElement.clientHeight)}`;
-      setScrollProgress(Number(scroll));
+      if (window.scrollY > 300) {
+        setShowScrollTop(true);
+      } else {
+        setShowScrollTop(false);
+      }
     };
     window.addEventListener("scroll", handleScroll, { passive: true });
 
+    // Hero Carousel
     const interval = setInterval(
       () => setHeroIndex((prev) => (prev + 1) % HERO_IMAGES.length),
       5000,
@@ -295,6 +307,10 @@ export default function Home() {
     ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   const handleProductClick = useCallback((product: HomeMenuItem) => {
     if (!product.isAvailable) {
       toast.error("Stok habis kak 😭");
@@ -320,6 +336,7 @@ export default function Home() {
     [addToCart, lastClickTime],
   );
 
+  // Component Carousel (Reusable)
   const SectionCarousel = ({
     title,
     items,
@@ -332,7 +349,6 @@ export default function Home() {
     refObj?: any;
   }) => {
     const scrollRef = useRef<HTMLDivElement>(null);
-
     const scroll = (direction: "left" | "right") => {
       if (scrollRef.current) {
         const { current } = scrollRef;
@@ -340,6 +356,7 @@ export default function Home() {
         current.scrollBy({ left: scrollAmount, behavior: "smooth" });
       }
     };
+    const showSkeleton = isInitialLoading && items.length === 0;
 
     return (
       <section
@@ -356,11 +373,11 @@ export default function Home() {
           </Link>
         </div>
 
-        {/* Tombol Navigasi Desktop */}
+        {/* Navigasi Desktop */}
         <div className="absolute top-1/2 -translate-y-1/2 left-2 z-20 hidden md:group-hover/section:block">
           <button
             onClick={() => scroll("left")}
-            className="bg-black/50 p-2 rounded-full text-white hover:bg-orange-500 transition-colors"
+            className="bg-black/50 p-2 rounded-full text-white hover:bg-orange-500 transition-colors backdrop-blur-sm"
           >
             <ChevronLeft size={20} />
           </button>
@@ -368,7 +385,7 @@ export default function Home() {
         <div className="absolute top-1/2 -translate-y-1/2 right-2 z-20 hidden md:group-hover/section:block">
           <button
             onClick={() => scroll("right")}
-            className="bg-black/50 p-2 rounded-full text-white hover:bg-orange-500 transition-colors"
+            className="bg-black/50 p-2 rounded-full text-white hover:bg-orange-500 transition-colors backdrop-blur-sm"
           >
             <ChevronRight size={20} />
           </button>
@@ -378,7 +395,7 @@ export default function Home() {
           ref={scrollRef}
           className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide snap-x snap-mandatory"
         >
-          {isLoading && items.length === 0 ? (
+          {showSkeleton ? (
             Array.from({ length: 3 }).map((_, i) => (
               <Skeleton
                 key={i}
@@ -401,8 +418,9 @@ export default function Home() {
               </div>
             ))
           ) : (
-            <div className="w-full text-center text-xs text-zinc-500 py-4 bg-zinc-900/30 rounded-xl border border-dashed border-zinc-800">
-              Menu belum tersedia
+            <div className="w-full text-center text-xs text-zinc-500 py-6 bg-zinc-900/30 rounded-xl border border-dashed border-zinc-800 flex flex-col items-center gap-2">
+              <Utensils size={24} className="opacity-20" />
+              <span>Belum ada menu di sini</span>
             </div>
           )}
         </div>
@@ -412,14 +430,45 @@ export default function Home() {
 
   return (
     <MobileLayout>
-      {/* Scroll Progress Bar */}
-      <div
-        className="fixed top-0 left-0 h-1 bg-orange-600 z-[100]"
-        style={{ width: `${scrollProgress * 100}%` }}
+      {/* --- SEO JSON-LD INJECTION (OPTIMASI SEO & TWA) --- */}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify({
+            "@context": "https://schema.org",
+            "@type": "Restaurant",
+            name: storeInfo.name,
+            image: HERO_IMAGES[0],
+            address: {
+              "@type": "PostalAddress",
+              streetAddress: storeInfo.address,
+              addressCountry: "ID",
+            },
+            priceRange: "$",
+            servesCuisine: "Indonesian",
+            openingHoursSpecification: {
+              "@type": "OpeningHoursSpecification",
+              dayOfWeek: [
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday",
+                "Saturday",
+                "Sunday",
+              ],
+              opens: storeInfo.open_hour || "17:00",
+              closes: storeInfo.close_hour || "23:59",
+            },
+          }),
+        }}
       />
 
-      {/* HERO & HEADER */}
-      <section className="relative h-[340px] w-full overflow-hidden group bg-zinc-900">
+      {/* HERO SECTION */}
+      <section
+        ref={topRef}
+        className="relative h-[340px] w-full overflow-hidden group bg-zinc-900"
+      >
         {HERO_IMAGES.map((img, idx) => (
           <div
             key={idx}
@@ -431,7 +480,7 @@ export default function Home() {
               fill
               className="object-cover"
               priority={idx === 0}
-              quality={65}
+              quality={60}
               sizes="(max-width: 768px) 100vw, 600px"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/40 to-transparent" />
@@ -454,13 +503,11 @@ export default function Home() {
                 {storeInfo.isOpenNow ? "Buka Sekarang" : "Tutup"}
               </span>
             </div>
-            {storeInfo.open_hour ? (
+            {storeInfo.open_hour && (
               <div className="text-[10px] text-zinc-300 bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 font-medium animate-in fade-in">
                 {storeInfo.open_hour.slice(0, 5)} -{" "}
                 {storeInfo.close_hour?.slice(0, 5)}
               </div>
-            ) : (
-              <Skeleton className="h-6 w-24 rounded-full bg-white/10" />
             )}
           </div>
           <div className="mb-1">
@@ -512,9 +559,7 @@ export default function Home() {
           <div className="p-2 bg-zinc-900 rounded-full text-orange-500 border border-zinc-800 shadow-md">
             <ThumbsUp size={16} />
           </div>
-          <span className="text-[10px] text-zinc-400 font-medium">
-            Harga Murah
-          </span>
+          <span className="text-[10px] text-zinc-400 font-medium">Murah</span>
         </div>
         <div className="flex flex-col items-center gap-1 text-center">
           <div className="p-2 bg-zinc-900 rounded-full text-orange-500 border border-zinc-800 shadow-md">
@@ -574,7 +619,7 @@ export default function Home() {
         </div>
       </div>
 
-      {/* PROMO */}
+      {/* PROMO CAROUSEL */}
       {promos.length > 0 && (
         <div className="px-5 pb-6 border-b border-white/5">
           <div className="flex overflow-x-auto gap-3 scrollbar-hide snap-x snap-mandatory">
@@ -632,7 +677,7 @@ export default function Home() {
         </div>
       </section>
 
-      {/* PALING LARIS (Grid 1x1 List Style) */}
+      {/* PALING LARIS */}
       <section className="px-5 pb-6">
         <div className="flex items-end justify-between mb-4 border-l-4 border-orange-500 pl-3">
           <div>
@@ -647,7 +692,7 @@ export default function Home() {
           </Link>
         </div>
         <div className="space-y-3">
-          {isLoading && recommendedItems.length === 0
+          {isInitialLoading && recommendedItems.length === 0
             ? Array.from({ length: 3 }).map((_, i) => (
                 <Skeleton key={i} className="h-24 rounded-xl bg-zinc-800" />
               ))
@@ -656,7 +701,7 @@ export default function Home() {
                   key={p.id}
                   product={p}
                   index={i}
-                  isHorizontal={true} // Mode LIST
+                  isHorizontal={true}
                   showLove={false}
                   onClick={() => handleProductClick(p)}
                   onQuickAdd={(e) => handleQuickAdd(e, p)}
@@ -665,7 +710,7 @@ export default function Home() {
         </div>
       </section>
 
-      {/* CAROUSEL SECTIONS (Baru Mateng, Pedas, dll) */}
+      {/* DYNAMIC SECTIONS */}
       <SectionCarousel
         title="Baru Mateng ♨️"
         items={newItems}
@@ -696,9 +741,8 @@ export default function Home() {
         refObj={cemilanRef}
       />
 
-      {/* NEWSLETTER & FAQ (YANG HILANG KEMBALI) */}
+      {/* NEWSLETTER & FAQ */}
       <section className="px-5 py-8 space-y-6">
-        {/* Newsletter Card */}
         <div className="bg-zinc-900 rounded-2xl p-5 border border-zinc-800 text-center relative overflow-hidden group">
           <div className="absolute top-0 right-0 w-24 h-24 bg-orange-500/10 rounded-full blur-2xl -mr-8 -mt-8"></div>
           <Mail className="mx-auto text-orange-500 mb-2" size={28} />
@@ -719,7 +763,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* FAQ Redesign - Simple Card (KEMBALI!) */}
         <div className="bg-zinc-900/30 border border-white/5 rounded-2xl p-5 space-y-4">
           <h3 className="text-white font-bold text-sm flex items-center gap-2 mb-2">
             <HelpCircle size={16} className="text-orange-500" /> FAQ Singkat
@@ -749,6 +792,14 @@ export default function Home() {
           ))}
         </div>
       </section>
+
+      {/* BACK TO TOP BUTTON */}
+      <button
+        onClick={scrollToTop}
+        className={`fixed bottom-24 right-5 z-40 bg-zinc-900 border border-zinc-700 text-white p-2 rounded-full shadow-lg transition-all duration-300 ${showScrollTop ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10 pointer-events-none"}`}
+      >
+        <ArrowUp size={20} />
+      </button>
 
       <FloatingCart />
       {isModalOpen && selectedProduct && (
