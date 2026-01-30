@@ -17,7 +17,6 @@ import {
   Send,
   Loader2,
   Lock,
-  Calendar,
 } from "lucide-react";
 import Image from "next/image";
 import { useState, useEffect, useRef } from "react";
@@ -44,8 +43,8 @@ const style = `
 .animate-marquee-smooth {
   display: flex;
   width: max-content;
-  animation: marquee 40s linear infinite; /* Durasi lambat agar cinematic */
-  will-change: transform; /* Paksa GPU Rendering */
+  animation: marquee 40s linear infinite; /* Cinematic Speed */
+  will-change: transform;
 }
 .animate-marquee-smooth:hover {
   animation-play-state: paused;
@@ -67,9 +66,13 @@ interface StoreData {
   map_embed_url: string;
   instagram_url: string;
   whatsapp_number: string;
+  // Gallery dari Config
+  gallery_image_url_1: string;
+  gallery_image_url_2: string;
+  gallery_image_url_3: string;
 }
 
-const CACHE_KEY_STORY = "story_data_final_v8";
+const CACHE_KEY_STORY = "story_data_final_v9"; // Bump version
 
 // --- KOMPONEN KECIL ---
 const VerifiedBadge = () => (
@@ -79,7 +82,7 @@ const VerifiedBadge = () => (
 );
 
 const ReviewCard = ({ review }: { review: any }) => (
-  <div className="w-[280px] bg-zinc-900/90 border border-white/10 p-4 rounded-2xl flex flex-col justify-between h-auto shadow-lg backdrop-blur-sm mx-3 select-none transition-transform hover:scale-[1.02] duration-300">
+  <div className="w-[280px] bg-zinc-900/90 border border-white/10 p-4 rounded-2xl flex flex-col justify-between h-auto shadow-lg backdrop-blur-sm mx-3 select-none transition-transform active:scale-95 duration-200">
     <div>
       <div className="flex justify-between items-start mb-2">
         <div className="flex gap-0.5">
@@ -116,12 +119,12 @@ const ReviewCard = ({ review }: { review: any }) => (
 export default function StoryPage() {
   const [storeData, setStoreData] = useState<StoreData | null>(null);
   const [stats, setStats] = useState({ orders: 0, menus: 0, year: 2024 });
-  const [gallery, setGallery] = useState<any[]>([]);
+  // Gallery sekarang array string URL
+  const [galleryImages, setGalleryImages] = useState<string[]>([]);
   const [reviews, setReviews] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // States UX
-  const [isCopied, setIsCopied] = useState(false);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
   const [userRating, setUserRating] = useState(5);
   const [userComment, setUserComment] = useState("");
@@ -140,40 +143,34 @@ export default function StoryPage() {
 
   // Title Update
   useEffect(() => {
-    if (storeData?.name) document.title = `${storeData.name} - Cerita Kami`;
+    if (storeData?.name) document.title = `Tentang Kami - ${storeData.name}`;
   }, [storeData]);
 
-  // FETCH DATA WITH INSTANT CACHE
+  // FETCH DATA
   useEffect(() => {
     const savedName = localStorage.getItem("customer_name");
     if (savedName) setCustomerName(savedName);
 
-    // 1. Load Cache Langsung (Synchronous-like effect)
+    // Load Cache
     const cachedData = sessionStorage.getItem(CACHE_KEY_STORY);
     let hasCache = false;
-
     if (cachedData) {
       try {
         const parsed = JSON.parse(cachedData);
         setStoreData(parsed.storeData);
         setStats(parsed.stats);
-        setGallery(parsed.gallery);
+        setGalleryImages(parsed.galleryImages || []);
         setReviews(parsed.reviews);
-        setIsLoading(false); // Langsung matikan loading jika cache ada
+        setIsLoading(false);
         hasCache = true;
-      } catch (e) {
-        console.error("Cache corrupted");
-      }
+      } catch (e) {}
     }
 
-    // 2. Fetch Fresh Data (Background Update)
     const fetchData = async () => {
-      if (!hasCache) setIsLoading(true); // Hanya loading jika tidak ada cache
-
+      if (!hasCache) setIsLoading(true);
       try {
-        const [config, gal, rev, countOrders, countMenus] = await Promise.all([
+        const [config, rev, countOrders, countMenus] = await Promise.all([
           supabase.from("store_config").select("*").single(),
-          supabase.from("gallery").select("*").limit(3),
           supabase
             .from("reviews")
             .select("*")
@@ -189,25 +186,44 @@ export default function StoryPage() {
             .select("id", { count: "exact", head: true }),
         ]);
 
+        const conf = config.data;
+
+        // Ambil gambar dari store_config (SINKRONISASI ADMIN)
+        const newGallery = [
+          conf?.gallery_image_url_1,
+          conf?.gallery_image_url_2,
+          conf?.gallery_image_url_3,
+        ].filter(Boolean) as string[];
+
+        // Jika gallery kosong di config, pakai default placeholder
+        if (newGallery.length === 0) {
+          newGallery.push(
+            "https://images.unsplash.com/photo-1555126634-323283e090fa?q=80&w=400",
+          );
+          newGallery.push(
+            "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?q=80&w=400",
+          );
+          newGallery.push(
+            "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?q=80&w=400",
+          );
+        }
+
         const newStats = {
           orders: countOrders.count || 1200,
           menus: countMenus.count || 40,
-          year:
-            new Date(config.data?.created_at || new Date()).getFullYear() ||
-            2024,
+          year: new Date(conf?.created_at || new Date()).getFullYear() || 2024,
         };
 
         const newData = {
-          storeData: config.data,
+          storeData: conf,
           stats: newStats,
-          gallery: gal.data || [],
+          galleryImages: newGallery,
           reviews: rev.data || [],
         };
 
-        // Update state hanya jika data berubah (React akan handle diffing)
-        setStoreData(config.data);
+        setStoreData(conf);
         setStats(newStats);
-        setGallery(gal.data || []);
+        setGalleryImages(newGallery);
         setReviews(rev.data || []);
 
         sessionStorage.setItem(CACHE_KEY_STORY, JSON.stringify(newData));
@@ -217,7 +233,6 @@ export default function StoryPage() {
         setIsLoading(false);
       }
     };
-
     fetchData();
   }, []);
 
@@ -262,9 +277,7 @@ export default function StoryPage() {
         is_featured: false,
       });
     if (!error) {
-      toast.success("Terkirim! 🎉", {
-        description: "Menunggu moderasi admin.",
-      });
+      toast.success("Terkirim! 🎉");
       setIsReviewModalOpen(false);
       setUserComment("");
       setUserRating(5);
@@ -277,17 +290,33 @@ export default function StoryPage() {
   const handleCopyAddress = () => {
     if (storeData?.address) {
       navigator.clipboard.writeText(storeData.address);
-      setIsCopied(true);
       if (navigator.vibrate) navigator.vibrate(50);
       toast.success("Alamat disalin! 📋");
-      setTimeout(() => setIsCopied(false), 2000);
     }
   };
 
-  // --- RENDER ---
+  // SEO JSON-LD
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Restaurant",
+    name: storeData?.name,
+    image: storeData?.history_image_url,
+    address: {
+      "@type": "PostalAddress",
+      streetAddress: storeData?.address,
+      addressCountry: "ID",
+    },
+    telephone: storeData?.whatsapp_number,
+  };
+
   return (
     <MobileLayout>
-      {/* HERO SECTION (Optimized: No heavy transforms on scroll) */}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
+
+      {/* HERO SECTION */}
       <div className="relative h-[420px] w-full overflow-hidden bg-zinc-950 gpu-layer">
         <div className="absolute inset-0 w-full h-full">
           {isLoading && !storeData ? (
@@ -377,27 +406,27 @@ export default function StoryPage() {
           </div>
         </section>
 
-        {/* GALLERY (Lightweight) */}
+        {/* GALLERY (Sinkron dengan Admin Settings) */}
         <section>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-white font-bold text-lg flex items-center gap-2">
-              <Instagram className="text-pink-500" /> Galeri Momen
+              Galeri Momen
             </h3>
           </div>
           <div className="grid grid-cols-2 gap-2">
-            {isLoading && gallery.length === 0 ? (
+            {isLoading && galleryImages.length === 0 ? (
               <Skeleton className="h-40 w-full rounded-xl bg-zinc-900 col-span-2" />
             ) : (
-              gallery.map((item, idx) => (
+              galleryImages.map((url, idx) => (
                 <div
-                  key={item.id}
+                  key={idx}
                   className={`relative rounded-xl overflow-hidden bg-zinc-900 h-40 border border-white/5 ${idx === 0 ? "col-span-2" : "col-span-1"}`}
                 >
                   <Image
-                    src={item.image_url}
+                    src={url}
                     alt="Gallery"
                     fill
-                    className="object-cover opacity-90"
+                    className="object-cover opacity-90 hover:scale-105 transition-transform duration-500"
                     sizes="(max-width: 768px) 100vw, 300px"
                   />
                 </div>
@@ -406,7 +435,7 @@ export default function StoryPage() {
           </div>
         </section>
 
-        {/* REVIEWS MARQUEE (SMOOTH LOOP) */}
+        {/* REVIEWS MARQUEE */}
         <section className="bg-gradient-to-br from-zinc-900 to-zinc-950 rounded-3xl p-5 border border-white/5 relative overflow-hidden">
           <div className="absolute top-0 right-0 w-32 h-32 bg-orange-500/10 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
 
@@ -432,23 +461,12 @@ export default function StoryPage() {
             </Button>
           </div>
 
-          {/* MARQUEE CONTAINER */}
           <div className="relative w-full overflow-hidden mask-linear-fade">
             {reviews.length > 0 ? (
               <div className="animate-marquee-smooth">
-                {/* Render Original */}
-                {reviews.map((r, i) => (
+                {[...reviews, ...reviews, ...reviews].map((r, i) => (
                   <ReviewCard key={`orig-${i}`} review={r} />
                 ))}
-                {/* Render Duplicate for Seamless Loop */}
-                {reviews.map((r, i) => (
-                  <ReviewCard key={`dup-${i}`} review={r} />
-                ))}
-                {/* Render Triplicate if items are few, to ensure full width cover */}
-                {reviews.length < 5 &&
-                  reviews.map((r, i) => (
-                    <ReviewCard key={`tri-${i}`} review={r} />
-                  ))}
               </div>
             ) : (
               <div className="w-full text-center py-4 text-zinc-600 text-xs italic">
@@ -458,7 +476,7 @@ export default function StoryPage() {
           </div>
         </section>
 
-        {/* LOCATION */}
+        {/* LOCATION (FIXED MAP & NO LAG) */}
         <section className="space-y-4">
           <h3 className="text-white font-bold text-lg flex items-center gap-2">
             <MapPin className="text-orange-500" /> Lokasi
@@ -479,7 +497,9 @@ export default function StoryPage() {
               <Copy size={16} />
             </div>
           </div>
-          <div className="rounded-2xl overflow-hidden border border-white/10 h-48 bg-zinc-900 relative group">
+
+          {/* MAP OPTIMIZED: Clean Iframe, No Grayscale Filter (No Lag) */}
+          <div className="rounded-2xl overflow-hidden border border-white/10 h-64 bg-zinc-900 relative shadow-lg">
             {storeData?.map_embed_url && (
               <iframe
                 src={storeData.map_embed_url}
@@ -487,15 +507,17 @@ export default function StoryPage() {
                 height="100%"
                 style={{ border: 0 }}
                 loading="lazy"
-                className="grayscale opacity-60 group-hover:grayscale-0 transition-all duration-700"
+                title="Map Lokasi"
+                // Hilangkan class grayscale/transition agar ringan
+                className="w-full h-full"
               />
             )}
             <a
               href={`http://maps.google.com/?q=${encodeURIComponent(storeData?.address || "")}`}
               target="_blank"
-              className="absolute bottom-3 right-3 bg-white text-black px-4 py-2 rounded-full text-[10px] font-bold shadow-xl flex items-center gap-2 z-10 active:scale-90"
+              className="absolute bottom-3 right-3 bg-white text-black px-4 py-2 rounded-full text-[10px] font-bold shadow-xl flex items-center gap-2 z-10 active:scale-90 hover:bg-orange-500 hover:text-white transition-colors"
             >
-              Buka Peta <ArrowRight size={12} />
+              Buka di App <ArrowRight size={12} />
             </a>
           </div>
         </section>
