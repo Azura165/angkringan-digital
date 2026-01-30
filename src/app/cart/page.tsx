@@ -26,7 +26,6 @@ import {
   ChevronUp,
   ChefHat,
   WifiOff,
-  ImageOff,
 } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
@@ -59,12 +58,16 @@ export default function CartPage() {
     clearCart,
   } = useCart();
 
-  // --- STATE CONFIG ---
+  // --- STATE ---
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showBillDetails, setShowBillDetails] = useState(true);
 
-  // Alert State
+  // State khusus untuk menangani gambar yang gagal loading per Item ID
+  const [failedImages, setFailedImages] = useState<
+    Record<number | string, boolean>
+  >({});
+
   const [alertConfig, setAlertConfig] = useState({
     isOpen: false,
     title: "",
@@ -74,7 +77,6 @@ export default function CartPage() {
     isDestructive: true,
   });
 
-  // Form Data
   const [customerName, setCustomerName] = useState("");
   const [tableNumber, setTableNumber] = useState("");
   const [isTableLocked, setIsTableLocked] = useState(false);
@@ -82,10 +84,9 @@ export default function CartPage() {
   const [paymentMethod, setPaymentMethod] = useState<"cash" | "qris">("cash");
   const [needUtensils, setNeedUtensils] = useState(true);
 
-  // Notes & System
   const [itemNotes, setItemNotes] = useState<Record<string, string>>({});
   const [isNoteOpen, setIsNoteOpen] = useState<string | null>(null);
-  const [adminPhone, setAdminPhone] = useState("6285746869466"); // Default Fallback
+  const [adminPhone, setAdminPhone] = useState("6285746869466");
 
   const nameInputRef = useRef<HTMLInputElement>(null);
   const tableInputRef = useRef<HTMLInputElement>(null);
@@ -117,7 +118,6 @@ export default function CartPage() {
     const savedName = localStorage.getItem("customer_name");
     if (savedName) setCustomerName(savedName);
 
-    // Ambil nomor WA Admin dari DB (Persiapan Halaman Pengaturan)
     const fetchConfig = async () => {
       try {
         const { data } = await supabase
@@ -125,9 +125,7 @@ export default function CartPage() {
           .select("whatsapp_number")
           .single();
         if (data?.whatsapp_number) setAdminPhone(data.whatsapp_number);
-      } catch (e) {
-        // Silent error, pakai default
-      }
+      } catch (e) {}
     };
     fetchConfig();
   }, []);
@@ -147,9 +145,8 @@ export default function CartPage() {
   const handleDecreaseQty = useCallback(
     (item: any) => {
       vibrate();
-      if (item.qty > 1) {
-        removeFromCart(item.id);
-      } else {
+      if (item.qty > 1) removeFromCart(item.id);
+      else {
         setAlertConfig({
           isOpen: true,
           title: "Hapus Item?",
@@ -199,7 +196,7 @@ export default function CartPage() {
     [removeItem, addToCart],
   );
 
-  // --- CORE: CHECKOUT PROCESS (FIXED & SECURE) ---
+  // --- CORE: PROCESS ORDER & WHATSAPP ---
   const handleProcessOrder = async () => {
     if (!navigator.onLine) {
       toast.error("Kamu sedang offline!", {
@@ -236,30 +233,24 @@ export default function CartPage() {
 
     try {
       // 1. Insert ORDER
-      const orderPayload = {
-        customer_name: safeName,
-        table_number: orderType === "takeaway" ? "Takeaway" : safeTable,
-        total_price: finalTotal,
-        status: "pending",
-        payment_status: "unpaid",
-        payment_method: paymentMethod,
-        created_at: new Date().toISOString(),
-      };
-
       const { data: orderData, error: orderError } = await supabase
         .from("orders")
-        .insert(orderPayload)
-        .select("id")
+        .insert({
+          customer_name: safeName,
+          table_number: orderType === "takeaway" ? "Takeaway" : safeTable,
+          total_price: finalTotal,
+          status: "pending",
+          payment_status: "unpaid",
+          payment_method: paymentMethod,
+          created_at: new Date().toISOString(),
+        })
+        .select("id, order_code")
         .single();
 
-      if (orderError) {
-        console.error("Order Insert Error:", orderError.message);
-        throw new Error("Gagal membuat pesanan.");
-      }
-
+      if (orderError) throw new Error("Gagal membuat pesanan.");
       if (!orderData?.id) throw new Error("ID Order tidak ditemukan.");
 
-      // 2. Insert ITEMS (Detail Pesanan)
+      // 2. Insert ITEMS
       const orderItemsData = items.map((item) => ({
         order_id: orderData.id,
         menu_name: item.name,
@@ -272,28 +263,46 @@ export default function CartPage() {
         .from("order_items")
         .insert(orderItemsData);
 
-      // ERROR HANDLING YANG JELAS
       if (itemsError) {
-        console.error("Items Insert Error:", itemsError.message); // Lihat pesan aslinya di console
-        // Jika gagal insert item, kita harus hapus order yang "kosong" agar tidak jadi sampah
         await supabase.from("orders").delete().eq("id", orderData.id);
-        throw new Error("Gagal menyimpan detail menu. Silakan coba lagi.");
+        throw new Error("Gagal menyimpan detail menu.");
       }
 
-      // 3. WhatsApp Integration (Sukses)
-      const time = new Date().toLocaleTimeString("id-ID", {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-      let message = `*ORDER BARU #${orderData.id}* 🛎️\n📅 ${time} | ${safeName.toUpperCase()}\n`;
-      message += `📍 ${orderType === "dine-in" ? `Meja ${safeTable}` : "Bungkus"} | ${paymentMethod === "cash" ? "Tunai" : "QRIS"}\n`;
-      message += `------------------\n`;
-      items.forEach((item) => {
-        const note = itemNotes[item.id] ? ` (${itemNotes[item.id]})` : "";
-        message += `${item.qty}x ${item.name}${note}\n`;
-      });
-      message += `------------------\n*TOTAL: Rp ${finalTotal.toLocaleString("id-ID")}*`;
+      // 3. WHATSAPP FORMATTING (PROFESIONAL & GANTENG)
+      const code = orderData.order_code || `#${orderData.id}`;
+      const typeLabel =
+        orderType === "dine-in"
+          ? `🍽️ Makan Ditempat (Meja ${safeTable})`
+          : "🛍️ Dibungkus (Takeaway)";
+      const payLabel =
+        paymentMethod === "cash" ? "💵 Tunai (Cash)" : "💳 QRIS / Transfer";
+      const utensilLabel = needUtensils
+        ? "✅ Pakai Alat Makan"
+        : "❌ Tanpa Alat Makan";
 
+      // Menggunakan %0A untuk baris baru agar rapi di URL
+      let message = `*PESANAN BARU!* 🔔\n`;
+      message += `*KODE: ${code}*\n`;
+      message += `--------------------------------\n`;
+      message += `👤 Nama   : *${safeName.toUpperCase()}*\n`;
+      message += `📍 Tipe   : ${typeLabel}\n`;
+      message += `💰 Bayar  : ${payLabel}\n`;
+      message += `🍴 Info   : ${utensilLabel}\n`;
+      message += `--------------------------------\n`;
+      message += `*Daftar Menu:*\n`;
+
+      items.forEach((item) => {
+        const note = itemNotes[item.id]
+          ? `\n   └ 📝 _${itemNotes[item.id]}_`
+          : "";
+        message += `▪️ ${item.qty}x ${item.name} @ ${item.price / 1000}k${note}\n`;
+      });
+
+      message += `--------------------------------\n`;
+      message += `*TOTAL: Rp ${finalTotal.toLocaleString("id-ID")}*\n`;
+      message += `\n_Mohon diproses ya kak, terima kasih!_ 🙏`;
+
+      // 4. Success Flow
       moveToHistory(safeName, orderType === "dine-in" ? safeTable : "Takeaway");
       clearCart();
       setIsCheckoutOpen(false);
@@ -306,9 +315,9 @@ export default function CartPage() {
         router.push("/history");
       }, 500);
     } catch (error: any) {
-      console.error("CRITICAL ERROR:", error);
-      toast.error(error.message || "Terjadi kesalahan sistem.", {
-        description: "Pastikan koneksi internet lancar.",
+      console.error("ORDER ERROR:", error);
+      toast.error(error.message || "Gagal mengirim pesanan.", {
+        description: "Cek koneksi internetmu.",
       });
     } finally {
       setIsProcessing(false);
@@ -324,7 +333,6 @@ export default function CartPage() {
 
   return (
     <MobileLayout>
-      {/* HEADER */}
       <div className="sticky top-0 z-40 bg-zinc-950/90 backdrop-blur-md border-b border-white/5 p-4 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
@@ -365,7 +373,6 @@ export default function CartPage() {
           </div>
         ) : (
           <>
-            {/* ITEMS LIST */}
             <div className="space-y-3">
               {items.map((item) => (
                 <div
@@ -373,7 +380,8 @@ export default function CartPage() {
                   className="bg-zinc-900/40 border border-white/5 rounded-2xl p-3 relative group shadow-sm flex gap-3"
                 >
                   <div className="relative h-20 w-20 rounded-xl bg-zinc-800 overflow-hidden flex-shrink-0 border border-white/5">
-                    {item.image ? (
+                    {/* LOGIC GAMBAR PINTAR */}
+                    {item.image && !failedImages[item.id] ? (
                       <Image
                         src={item.image}
                         alt={item.name}
@@ -381,22 +389,28 @@ export default function CartPage() {
                         className="object-cover"
                         sizes="80px"
                         quality={50}
-                        onError={(e: any) => {
-                          e.currentTarget.style.display = "none";
-                          e.currentTarget.nextSibling.style.display = "flex";
-                        }}
+                        onError={() =>
+                          setFailedImages((prev) => ({
+                            ...prev,
+                            [item.id]: true,
+                          }))
+                        } // Set error state
                       />
                     ) : null}
+
+                    {/* FALLBACK ICON JIKA GAMBAR ERROR ATAU TIDAK ADA */}
                     <div
-                      className={`absolute inset-0 flex items-center justify-center text-zinc-600 bg-zinc-800 ${item.image ? "hidden" : "flex"}`}
+                      className={`absolute inset-0 flex items-center justify-center text-zinc-600 bg-zinc-800 ${item.image && !failedImages[item.id] ? "hidden" : "flex"}`}
                     >
-                      {item.name.toLowerCase().includes("es") ? (
+                      {item.name.toLowerCase().includes("es") ||
+                      item.name.toLowerCase().includes("teh") ? (
                         <Coffee size={24} />
                       ) : (
                         <Utensils size={24} />
                       )}
                     </div>
                   </div>
+
                   <div className="flex-1 flex flex-col justify-between py-0.5">
                     <div className="flex justify-between items-start">
                       <h3 className="font-bold text-zinc-100 text-sm line-clamp-2 leading-tight">
@@ -462,7 +476,7 @@ export default function CartPage() {
               ))}
             </div>
 
-            {/* UPSELL & BILL */}
+            {/* UPSELL & BILL - Code SAMA seperti sebelumnya ... */}
             {!hasDrink && (
               <div className="bg-blue-900/10 border border-blue-500/20 rounded-2xl p-3 flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -486,7 +500,6 @@ export default function CartPage() {
                 </Link>
               </div>
             )}
-
             <div className="bg-zinc-900/50 rounded-2xl border border-white/5 overflow-hidden">
               <div
                 onClick={() => setShowBillDetails(!showBillDetails)}
@@ -525,7 +538,6 @@ export default function CartPage() {
         )}
       </div>
 
-      {/* FOOTER BUTTON */}
       {items.length > 0 && (
         <div className="fixed bottom-[80px] left-0 right-0 px-4 z-40">
           <div className="max-w-md mx-auto bg-zinc-950/80 backdrop-blur-xl border border-white/10 p-3 rounded-3xl shadow-2xl flex gap-2">
@@ -551,7 +563,6 @@ export default function CartPage() {
         </div>
       )}
 
-      {/* DIALOGS */}
       <Dialog
         open={alertConfig.isOpen}
         onOpenChange={(open) =>

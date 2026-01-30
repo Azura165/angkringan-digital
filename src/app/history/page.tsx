@@ -59,8 +59,9 @@ interface Order {
 }
 
 const ITEMS_PER_PAGE = 10;
+const CACHE_KEY = "history_orders_final_v10";
 
-// --- STATUS CONFIG ---
+// --- CONFIG ---
 const getStatusConfig = (status: string) => {
   switch (status) {
     case "pending":
@@ -405,17 +406,14 @@ export default function HistoryPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [customerName, setCustomerName] = useState<string | null>(null);
-
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-
   const [reviewOrder, setReviewOrder] = useState<Order | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // FETCH DATA
   const fetchHistory = useCallback(
     async (name: string, reset = false) => {
       if (reset) {
@@ -425,10 +423,8 @@ export default function HistoryPage() {
       } else {
         setLoadingMore(true);
       }
-
       const currentFrom = reset ? 0 : (page + 1) * ITEMS_PER_PAGE;
       const currentTo = currentFrom + ITEMS_PER_PAGE - 1;
-
       const { data, error } = await supabase
         .from("orders")
         .select("*, order_items(*)")
@@ -436,7 +432,6 @@ export default function HistoryPage() {
         .eq("is_visible_to_user", true)
         .order("created_at", { ascending: false })
         .range(currentFrom, currentTo);
-
       if (!error && data) {
         const mappedOrders = data.map((o: any) => ({
           id: o.id,
@@ -452,13 +447,14 @@ export default function HistoryPage() {
             note: i.note,
           })),
         }));
-
-        if (reset) setOrders(mappedOrders);
-        else setOrders((prev) => [...prev, ...mappedOrders]);
-
+        if (reset) {
+          setOrders(mappedOrders);
+          sessionStorage.setItem(CACHE_KEY, JSON.stringify(mappedOrders));
+        } else {
+          setOrders((prev) => [...prev, ...mappedOrders]);
+        }
         if (data.length < ITEMS_PER_PAGE) setHasMore(false);
       }
-
       setIsLoading(false);
       setIsRefreshing(false);
       setLoadingMore(false);
@@ -466,42 +462,41 @@ export default function HistoryPage() {
     [page],
   );
 
-  // INITIAL LOAD & REALTIME
   useEffect(() => {
     const name = localStorage.getItem("customer_name");
     setCustomerName(name);
-
     if (name) {
-      fetchHistory(name, true);
+      const cachedData = sessionStorage.getItem(CACHE_KEY);
+      if (cachedData) {
+        setOrders(JSON.parse(cachedData));
+        setIsLoading(false);
+        fetchHistory(name, true);
+      } else {
+        fetchHistory(name, true);
+      }
 
-      // REALTIME LISTENER (FIXED TYPE ERROR)
       const channel = supabase
         .channel("public:orders-history")
         .on(
           "postgres_changes",
           { event: "*", schema: "public", table: "orders" },
           (payload) => {
-            // 1. Ambil data baru (dengan casting 'as any' agar TS tidak rewel)
             const newData = payload.new as any;
-
-            // 2. Cek apakah ini update milik user kita?
             if (newData && newData.customer_name === name) {
-              // 3. Cek apakah data ini di-soft delete? (Jika ya, hapus dari list)
               if (newData.is_visible_to_user === false) {
                 setOrders((prev) => prev.filter((o) => o.id !== newData.id));
                 return;
               }
-
               if (payload.eventType === "INSERT") {
-                fetchHistory(name, true); // Refresh list jika ada order baru
+                fetchHistory(name, true);
               } else if (payload.eventType === "UPDATE") {
-                // Update status secara lokal (tanpa fetch ulang)
-                setOrders((prev) =>
-                  prev.map((o) =>
+                setOrders((prev) => {
+                  const updated = prev.map((o) =>
                     o.id === newData.id ? { ...o, status: newData.status } : o,
-                  ),
-                );
-
+                  );
+                  sessionStorage.setItem(CACHE_KEY, JSON.stringify(updated));
+                  return updated;
+                });
                 if (newData.status === "ready") {
                   if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
                   toast.success("Pesananmu Siap! 🍽️");
@@ -511,7 +506,6 @@ export default function HistoryPage() {
           },
         )
         .subscribe();
-
       return () => {
         supabase.removeChannel(channel);
       };
@@ -521,7 +515,6 @@ export default function HistoryPage() {
   }, []);
 
   const groupedOrders = useMemo(() => groupOrdersByDate(orders), [orders]);
-
   const stats = useMemo(() => {
     const completed = orders.filter((o) => o.status === "completed");
     const totalSpent = completed.reduce(
@@ -544,17 +537,45 @@ export default function HistoryPage() {
     return { totalSpent, totalOrders, level, Icon, color };
   }, [orders]);
 
+  // --- REORDER LOGIC (ROBUST & SAFE) ---
   const handleReorder = useCallback(
-    (items: any[]) => {
-      items.forEach((item) =>
+    async (items: any[]) => {
+      toast("Mencari menu...", { icon: <Loader2 className="animate-spin" /> });
+
+      // 1. Siapkan Fallback (Jika DB masih error, kita tidak crash)
+      const imageMap = new Map();
+
+      try {
+        // 2. Coba fetch gambar (Jika kolom image ada)
+        // Kita gunakan select('*') agar lebih fleksibel kalau kolomnya beda
+        const { data: menuData, error } = await supabase
+          .from("menu_items")
+          .select("*");
+
+        if (!error && menuData) {
+          menuData.forEach((m: any) => {
+            // Simpan key lowercase agar pencarian case-insensitive
+            // Prioritaskan kolom 'image', lalu 'image_url', lalu 'img'
+            const img = m.image || m.image_url || m.img || "";
+            imageMap.set(m.name.trim().toLowerCase(), img);
+          });
+        }
+      } catch (e) {
+        console.warn("Skip image fetch:", e);
+      }
+
+      // 3. Masukkan ke Cart (Dengan atau Tanpa Gambar)
+      items.forEach((item) => {
+        const cleanName = item.menu_name.trim().toLowerCase();
         addToCart({
           id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           name: item.menu_name,
           price: item.price,
           qty: item.qty,
-          image: "",
-        } as any),
-      );
+          image: imageMap.get(cleanName) || "",
+        } as any);
+      });
+
       toast.success("Masuk keranjang! 🛒");
       router.push("/cart");
     },
@@ -674,7 +695,6 @@ export default function HistoryPage() {
                 </div>
               </div>
             </div>
-
             <div className="space-y-6">
               {Object.entries(groupedOrders).map(([date, groupOrders]) => (
                 <div key={date}>
@@ -695,7 +715,6 @@ export default function HistoryPage() {
                 </div>
               ))}
             </div>
-
             {hasMore && (
               <div className="flex justify-center mt-6">
                 <Button
@@ -733,17 +752,18 @@ export default function HistoryPage() {
           </div>
         )}
       </div>
-
       <ReviewDialog
         isOpen={!!reviewOrder}
         onClose={() => setReviewOrder(null)}
         onSubmit={handleSubmitReview}
         isSubmitting={isSubmitting}
       />
-
       <Dialog open={!!deleteId} onOpenChange={() => setDeleteId(null)}>
         <DialogContent className="bg-zinc-950 border-zinc-800 text-white max-w-[300px] rounded-3xl p-6">
           <DialogHeader>
+            <div className="mx-auto bg-zinc-900 p-3 rounded-full w-fit mb-2">
+              <EyeOff size={24} className="text-zinc-400" />
+            </div>
             <DialogTitle className="text-center text-lg">
               Sembunyikan Riwayat?
             </DialogTitle>
