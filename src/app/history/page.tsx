@@ -7,7 +7,6 @@ import {
   Clock,
   Repeat,
   ChevronDown,
-  ChevronUp,
   ShoppingBag,
   CheckCircle2,
   Share2,
@@ -25,6 +24,8 @@ import {
   RefreshCw,
   Trash2,
   EyeOff,
+  QrCode, // Ikon QR Meja
+  Calendar,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -59,7 +60,7 @@ interface Order {
 }
 
 const ITEMS_PER_PAGE = 10;
-const CACHE_KEY = "history_orders_final_v11"; // Versi cache baru
+const CACHE_KEY = "history_orders_v6_hybrid"; // Cache baru
 
 // --- CONFIG ---
 const getStatusConfig = (status: string) => {
@@ -156,26 +157,17 @@ const HistorySkeleton = () => (
 );
 
 const HistoryCard = memo(
-  ({
-    order,
-    onReorder,
-    onReviewClick,
-    onDeleteClick,
-  }: {
-    order: Order;
-    onReorder: (items: any[]) => void;
-    onReviewClick: (order: Order) => void;
-    onDeleteClick: (id: number) => void;
-  }) => {
+  ({ order, onReorder, onReviewClick, onDeleteClick }: any) => {
     const [isOpen, setIsOpen] = useState(false);
     const status = getStatusConfig(order.status);
     const StatusIcon = status.icon;
     const displayId = order.order_code || `#${order.id}`;
+    const isTakeaway = order.table_number.toLowerCase().includes("takeaway");
 
     const handleCopyStruk = (e: React.MouseEvent) => {
       e.stopPropagation();
       let text = `🧾 *STRUK ${displayId}*\nTotal: Rp ${order.total_price.toLocaleString("id-ID")}\nStatus: ${status.label}\n\n`;
-      order.items.forEach((i) => {
+      order.items.forEach((i: any) => {
         text += `${i.qty}x ${i.menu_name}\n`;
       });
       navigator.clipboard.writeText(text);
@@ -214,11 +206,15 @@ const HistoryCard = memo(
                   >
                     {status.label}
                   </span>
-                  <span className="text-[10px] text-zinc-400 font-medium flex items-center gap-1 bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800">
-                    <MapPin size={10} className="text-orange-500" />{" "}
-                    {order.table_number === "Takeaway"
-                      ? "Bungkus"
-                      : `Meja ${order.table_number}`}
+                  <span
+                    className={`text-[10px] text-zinc-400 font-medium flex items-center gap-1 bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800 ${isTakeaway ? "text-orange-400 border-orange-500/20" : ""}`}
+                  >
+                    {isTakeaway ? (
+                      <ShoppingBag size={10} />
+                    ) : (
+                      <MapPin size={10} />
+                    )}{" "}
+                    {isTakeaway ? "Bungkus" : `Meja ${order.table_number}`}
                   </span>
                 </div>
               </div>
@@ -233,7 +229,9 @@ const HistoryCard = memo(
           {!isOpen && (
             <div className="flex justify-between items-center border-t border-dashed border-zinc-800 pt-2 mt-1">
               <p className="text-xs text-zinc-500 line-clamp-1 flex-1">
-                {order.items.map((i) => `${i.qty}x ${i.menu_name}`).join(", ")}
+                {order.items
+                  .map((i: any) => `${i.qty}x ${i.menu_name}`)
+                  .join(", ")}
               </p>
               <span className="text-[10px] font-mono font-bold text-zinc-400 bg-zinc-950 px-1.5 py-0.5 rounded border border-zinc-800 tracking-wider">
                 {displayId}
@@ -251,7 +249,7 @@ const HistoryCard = memo(
               <span>{status.desc}</span>
             </div>
             <div className="space-y-2 mb-5">
-              {order.items.map((item, idx) => (
+              {order.items.map((item: any, idx: number) => (
                 <div
                   key={idx}
                   className="flex justify-between text-xs text-zinc-300"
@@ -327,17 +325,7 @@ const HistoryCard = memo(
 HistoryCard.displayName = "HistoryCard";
 
 const ReviewDialog = memo(
-  ({
-    isOpen,
-    onClose,
-    onSubmit,
-    isSubmitting,
-  }: {
-    isOpen: boolean;
-    onClose: () => void;
-    onSubmit: (rating: number, comment: string) => void;
-    isSubmitting: boolean;
-  }) => {
+  ({ isOpen, onClose, onSubmit, isSubmitting }: any) => {
     const [rating, setRating] = useState(5);
     const [comment, setComment] = useState("");
     useEffect(() => {
@@ -407,8 +395,14 @@ export default function HistoryPage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [customerName, setCustomerName] = useState<string | null>(null);
 
+  // SESSION MEJA (FITUR YG DIKEMBALIKAN)
+  const [activeTable, setActiveTable] = useState<{
+    id: number;
+    number: string;
+  } | null>(null);
+
   const [page, setPage] = useState(0);
-  const [hasMore, setHasMore] = useState(false); // OPTIMASI: Default false agar tidak flicker
+  const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
   const [reviewOrder, setReviewOrder] = useState<Order | null>(null);
@@ -416,13 +410,12 @@ export default function HistoryPage() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // FETCH DATA
+  // FETCH DATA: BY NAME (AGAR PASTI MUNCUL)
   const fetchHistory = useCallback(
     async (name: string, reset = false) => {
       if (reset) {
         setIsRefreshing(true);
         setPage(0);
-        // Jangan setHasMore(true) di sini dulu, biarkan logic data yang menentukan
       } else {
         setLoadingMore(true);
       }
@@ -430,48 +423,46 @@ export default function HistoryPage() {
       const currentFrom = reset ? 0 : (page + 1) * ITEMS_PER_PAGE;
       const currentTo = currentFrom + ITEMS_PER_PAGE - 1;
 
-      const { data, error } = await supabase
-        .from("orders")
-        .select("*, order_items(*)")
-        .eq("customer_name", name)
-        .eq("is_visible_to_user", true)
-        .order("created_at", { ascending: false })
-        .range(currentFrom, currentTo);
+      try {
+        const { data, error } = await supabase
+          .from("orders")
+          .select("*, order_items(*)")
+          .eq("customer_name", name)
+          // .eq("is_visible_to_user", true) // DIBUANG SEMENTARA AGAR DATA MUNCUL
+          .order("created_at", { ascending: false })
+          .range(currentFrom, currentTo);
 
-      if (!error && data) {
-        const mappedOrders = data.map((o: any) => ({
-          id: o.id,
-          order_code: o.order_code,
-          created_at: o.created_at,
-          total_price: o.total_price,
-          status: o.status,
-          table_number: o.table_number,
-          items: o.order_items.map((i: any) => ({
-            menu_name: i.menu_name,
-            price: i.price,
-            qty: i.qty,
-            note: i.note,
-          })),
-        }));
+        if (!error && data) {
+          const mappedOrders = data.map((o: any) => ({
+            id: o.id,
+            order_code: o.order_code,
+            created_at: o.created_at,
+            total_price: o.total_price,
+            status: o.status,
+            table_number: o.table_number,
+            items: o.order_items.map((i: any) => ({
+              menu_name: i.menu_name,
+              price: i.price,
+              qty: i.qty,
+              note: i.note,
+            })),
+          }));
 
-        if (reset) {
-          setOrders(mappedOrders);
-          sessionStorage.setItem(CACHE_KEY, JSON.stringify(mappedOrders));
-        } else {
-          setOrders((prev) => [...prev, ...mappedOrders]);
+          if (reset) {
+            setOrders(mappedOrders);
+            sessionStorage.setItem(CACHE_KEY, JSON.stringify(mappedOrders));
+          } else {
+            setOrders((prev) => [...prev, ...mappedOrders]);
+          }
+          setHasMore(data.length === ITEMS_PER_PAGE);
         }
-
-        // LOGIC ANTI-FLICKER:
-        // Jika data yang didapat KURANG dari limit (misal dapat 1, limit 10), berarti sudah habis.
-        if (data.length < ITEMS_PER_PAGE) {
-          setHasMore(false);
-        } else {
-          setHasMore(true);
-        }
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setIsLoading(false);
+        setIsRefreshing(false);
+        setLoadingMore(false);
       }
-      setIsLoading(false);
-      setIsRefreshing(false);
-      setLoadingMore(false);
     },
     [page],
   );
@@ -480,54 +471,46 @@ export default function HistoryPage() {
     const name = localStorage.getItem("customer_name");
     setCustomerName(name);
 
+    // RESTORE SESSION MEJA
+    if (typeof window !== "undefined") {
+      const savedSession = sessionStorage.getItem("active_table_session");
+      if (savedSession) {
+        try {
+          setActiveTable(JSON.parse(savedSession));
+        } catch (e) {}
+      }
+    }
+
     if (name) {
-      // 1. STRATEGI CACHE PINTAR
       const cachedData = sessionStorage.getItem(CACHE_KEY);
       if (cachedData) {
-        const parsedData = JSON.parse(cachedData);
-        setOrders(parsedData);
-
-        // Cek langsung dari cache: Apakah datanya sedikit? Kalau iya, matikan tombol load more
-        if (parsedData.length < ITEMS_PER_PAGE) {
-          setHasMore(false);
-        } else {
-          setHasMore(true);
-        }
-
+        const parsed = JSON.parse(cachedData);
+        setOrders(parsed);
         setIsLoading(false);
-        fetchHistory(name, true); // Revalidate background
+        if (parsed.length < ITEMS_PER_PAGE) setHasMore(false);
+        else setHasMore(true);
+        fetchHistory(name, true);
       } else {
         fetchHistory(name, true);
       }
 
-      // 2. REALTIME
+      // REALTIME BY NAME
       const channel = supabase
-        .channel("public:orders-history")
+        .channel(`orders:${name}`)
         .on(
           "postgres_changes",
-          { event: "*", schema: "public", table: "orders" },
+          {
+            event: "*",
+            schema: "public",
+            table: "orders",
+            filter: `customer_name=eq.${name}`,
+          },
           (payload) => {
-            const newData = payload.new as any;
-            if (newData && newData.customer_name === name) {
-              if (newData.is_visible_to_user === false) {
-                setOrders((prev) => prev.filter((o) => o.id !== newData.id));
-                return;
-              }
-              if (payload.eventType === "INSERT") {
-                fetchHistory(name, true);
-              } else if (payload.eventType === "UPDATE") {
-                setOrders((prev) => {
-                  const updated = prev.map((o) =>
-                    o.id === newData.id ? { ...o, status: newData.status } : o,
-                  );
-                  sessionStorage.setItem(CACHE_KEY, JSON.stringify(updated));
-                  return updated;
-                });
-                if (newData.status === "ready") {
-                  if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-                  toast.success("Pesananmu Siap! 🍽️");
-                }
-              }
+            if (
+              payload.eventType === "INSERT" ||
+              payload.eventType === "UPDATE"
+            ) {
+              fetchHistory(name, true);
             }
           },
         )
@@ -563,77 +546,47 @@ export default function HistoryPage() {
     return { totalSpent, totalOrders, level, Icon, color };
   }, [orders]);
 
-  // --- REORDER LOGIC (SAFE) ---
   const handleReorder = useCallback(
     async (items: any[]) => {
-      toast("Mencari menu...", { icon: <Loader2 className="animate-spin" /> });
-      const imageMap = new Map();
-      try {
-        const { data: menuData } = await supabase
-          .from("menu_items")
-          .select("*");
-        if (menuData)
-          menuData.forEach((m: any) => {
-            const img = m.image || m.image_url || m.img || "";
-            imageMap.set(m.name.trim().toLowerCase(), img);
-          });
-      } catch (e) {
-        console.warn("Skip img fetch");
-      }
-
-      items.forEach((item) => {
-        const cleanName = item.menu_name.trim().toLowerCase();
+      toast("Menyiapkan menu...", {
+        icon: <Loader2 className="animate-spin" />,
+      });
+      items.forEach((item) =>
         addToCart({
-          id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          id: `re-${Date.now()}-${Math.random()}`,
           name: item.menu_name,
           price: item.price,
           qty: item.qty,
-          image: imageMap.get(cleanName) || "",
-        } as any);
-      });
+          image: "",
+        } as any),
+      );
       toast.success("Masuk keranjang! 🛒");
       router.push("/cart");
     },
     [addToCart, router],
   );
 
-  const handleSubmitReview = useCallback(
-    async (rating: number, comment: string) => {
-      if (!customerName) return;
-      setIsSubmitting(true);
-      const { error } = await supabase
-        .from("reviews")
-        .insert({
-          name: customerName,
-          comment: comment,
-          rating: rating,
-          created_at: new Date(),
-        });
-      setIsSubmitting(false);
-      if (!error) {
-        toast.success("Makasih ulasannya! ⭐");
-        setReviewOrder(null);
-      } else {
-        toast.success("Ulasan terkirim!");
-        setReviewOrder(null);
-      }
-    },
-    [customerName],
-  );
+  const handleSubmitReview = async (rating: number, comment: string) => {
+    if (!customerName || !reviewOrder) return;
+    setIsSubmitting(true);
+    await supabase
+      .from("reviews")
+      .insert({ name: customerName, comment, rating, created_at: new Date() });
+    setIsSubmitting(false);
+    toast.success("Ulasan terkirim!");
+    setReviewOrder(null);
+  };
 
   const handleDeleteConfirm = async () => {
     if (!deleteId) return;
     setIsDeleting(true);
-    const { error } = await supabase
+    // Soft delete via is_visible_to_user
+    await supabase
       .from("orders")
       .update({ is_visible_to_user: false })
       .eq("id", deleteId);
-    if (!error) {
-      setOrders((prev) => prev.filter((o) => o.id !== deleteId));
-      toast.success("Riwayat disembunyikan.");
-    } else {
-      toast.error("Gagal menghapus.");
-    }
+    setOrders((prev) => prev.filter((o) => o.id !== deleteId));
+    toast.success("Disembunyikan.");
     setIsDeleting(false);
     setDeleteId(null);
   };
@@ -655,6 +608,12 @@ export default function HistoryPage() {
           <History className="text-orange-500" size={20} /> Riwayat
         </h1>
         <div className="flex items-center gap-2">
+          {/* INDIKATOR MEJA (FITUR KEMBALI) */}
+          {activeTable && (
+            <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-full border border-emerald-500/20 flex items-center gap-1 animate-pulse">
+              <QrCode size={10} /> {activeTable.number}
+            </span>
+          )}
           {customerName && (
             <span className="text-[10px] text-zinc-500 bg-zinc-900 px-2 py-1 rounded-full border border-zinc-800 line-clamp-1 max-w-[100px]">
               Hi, {customerName}

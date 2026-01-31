@@ -12,7 +12,6 @@ import {
   MapPin,
   Clock,
   Image as ImageIcon,
-  History as HistoryIcon,
   Loader2,
   Smartphone,
   Globe,
@@ -22,7 +21,6 @@ import {
   EyeOff,
   LogOut,
   ExternalLink,
-  Info,
   Camera,
   LayoutTemplate,
   BookOpen,
@@ -34,6 +32,9 @@ import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import Image from "next/image";
+
+// --- CONFIG ---
+const CACHE_KEY = "admin_settings_cache_v1";
 
 // --- TYPES ---
 interface ConfigData {
@@ -58,7 +59,7 @@ interface ConfigData {
   gallery_image_url_3: string;
 }
 
-// DEFAULT VALUES (Fallback agar tidak error/kosong)
+// DEFAULT VALUES
 const DEFAULT_CONFIG: ConfigData = {
   store_name: "Angkringan Mas Radit",
   address: "",
@@ -87,7 +88,7 @@ const DEFAULT_CONFIG: ConfigData = {
     "https://images.unsplash.com/photo-1482049016688-2d3e1b311543?q=80&w=400",
 };
 
-// --- COMPONENT: IMAGE UPLOADER ---
+// --- COMPONENT: IMAGE UPLOADER (MEMOIZED) ---
 const ImageInput = memo(
   ({
     label,
@@ -239,37 +240,50 @@ export default function AdminSettingsPage() {
   const [isPassLoading, setIsPassLoading] = useState(false);
   const [showPass, setShowPass] = useState(false);
 
-  // FETCH DATA
-  useEffect(() => {
-    const fetchConfig = async () => {
-      setIsLoading(true);
-      try {
-        const { data, error } = await supabase
+  // 1. FETCH DATA (Optimized with Cache)
+  const fetchConfig = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from("store_config")
+        .select("*")
+        .single();
+      if (data) {
+        const mergedConfig = { ...DEFAULT_CONFIG, ...data };
+        setConfig(mergedConfig);
+        // Update cache dengan data terbaru
+        sessionStorage.setItem(CACHE_KEY, JSON.stringify(mergedConfig));
+      } else if (!data && !error) {
+        const { data: newData } = await supabase
           .from("store_config")
-          .select("*")
+          .insert([DEFAULT_CONFIG])
+          .select()
           .single();
-        if (data) {
-          // Merge dengan default agar tidak ada field kosong
-          setConfig({ ...DEFAULT_CONFIG, ...data });
-        } else if (!data && !error) {
-          // Create jika belum ada
-          const { data: newData } = await supabase
-            .from("store_config")
-            .insert([DEFAULT_CONFIG])
-            .select()
-            .single();
-          if (newData) setConfig(newData);
-        }
-      } catch (err) {
-        toast.error("Gagal memuat data");
-      } finally {
-        setIsLoading(false);
+        if (newData) setConfig(newData);
       }
-    };
-    fetchConfig();
+    } catch (err) {
+      toast.error("Gagal memuat data");
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
 
-  // Handler Change
+  // 2. INIT EFFECT (Load Cache -> Then Fetch Background)
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const cached = sessionStorage.getItem(CACHE_KEY);
+      if (cached) {
+        try {
+          setConfig(JSON.parse(cached));
+          setIsLoading(false); // Instan load jika ada cache
+        } catch (e) {
+          console.error("Cache invalid");
+        }
+      }
+    }
+    fetchConfig(); // Background fetch untuk update data terbaru
+  }, [fetchConfig]);
+
+  // Handler Change (Memoized)
   const handleChange = useCallback((field: keyof ConfigData, value: any) => {
     setConfig((prev) => ({ ...prev, [field]: value }));
   }, []);
@@ -282,15 +296,18 @@ export default function AdminSettingsPage() {
     }
     setIsSaving(true);
     try {
-      // Hanya kirim field yang relevan + ID untuk where clause
       const { error } = await supabase
         .from("store_config")
         .update(sectionFields)
         .eq("id", config.id);
       if (error) throw error;
 
+      // Update Cache Lokal secara Optimistic agar tidak perlu fetch ulang
+      const newConfig = { ...config, ...sectionFields };
+      setConfig(newConfig);
+      sessionStorage.setItem(CACHE_KEY, JSON.stringify(newConfig));
+
       toast.success("Perubahan disimpan! 🎉");
-      sessionStorage.clear(); // Clear cache
     } catch (error: any) {
       console.error("Save Error:", error);
       toast.error(`Gagal simpan: ${error.message || "Cek koneksi"}`);
@@ -350,10 +367,9 @@ export default function AdminSettingsPage() {
     setIsPassLoading(false);
   };
 
-  const handleClearCache = () => {
-    sessionStorage.clear();
-    localStorage.removeItem("store_config_cache_v2");
-    window.location.reload();
+  const handleRefresh = () => {
+    setIsLoading(true);
+    fetchConfig();
   };
 
   if (isLoading)
@@ -376,10 +392,10 @@ export default function AdminSettingsPage() {
         <Button
           variant="outline"
           size="sm"
-          onClick={handleClearCache}
+          onClick={handleRefresh}
           className="border-zinc-800 text-zinc-400 hover:text-white"
         >
-          <RefreshCw size={14} className="mr-2" /> Refresh
+          <RefreshCw size={14} className="mr-2" /> Refresh Data
         </Button>
       </div>
 

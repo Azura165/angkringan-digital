@@ -21,9 +21,23 @@ import {
   ChevronRight,
   ArrowUp,
   Star,
+  QrCode,
+  CheckCircle2,
+  AlertCircle,
+  X,
+  Loader2,
 } from "lucide-react";
 import Link from "next/link";
-import { useState, useEffect, useCallback, useRef, useTransition } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useTransition,
+  Suspense,
+  useMemo,
+} from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
@@ -31,8 +45,6 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-
-// Import Card Optimized
 import { HomeProductCard } from "@/components/features/home/HomeProductCard";
 
 const ProductDetailModal = dynamic(
@@ -42,6 +54,23 @@ const ProductDetailModal = dynamic(
     ),
   { ssr: false, loading: () => null },
 );
+
+// --- CSS KHUSUS ANIMASI SMOOTH (GPU ACCELERATED) ---
+const MARQUEE_STYLE = `
+  @keyframes marquee-linear {
+    0% { transform: translate3d(0, 0, 0); }
+    100% { transform: translate3d(-50%, 0, 0); }
+  }
+  .animate-marquee-smooth {
+    display: flex;
+    width: max-content; /* Pastikan lebar mengikuti konten */
+    animation: marquee-linear 30s linear infinite; /* LINEAR = Kecepatan Konstan */
+    will-change: transform; /* Optimasi GPU */
+  }
+  .animate-marquee-smooth:hover {
+    animation-play-state: paused; /* Fitur: Pause saat disentuh */
+  }
+`;
 
 // --- TIPE DATA ---
 interface HomeMenuItem extends MenuItem {
@@ -67,8 +96,8 @@ interface StoreInfo {
   close_hour: string | null;
   running_text: string;
   isOpenNow: boolean;
-  ratingAvg: string; // Tambahan: Rating Toko
-  ratingCount: number; // Tambahan: Jumlah Ulasan
+  ratingAvg: string;
+  ratingCount: number;
 }
 
 const HERO_IMAGES = [
@@ -85,14 +114,17 @@ const GRADIENT_MAP: Record<string, string> = {
   default: "bg-gradient-to-r from-orange-500 to-red-500",
 };
 
-const CACHE_KEY_STORE = "store_config_cache_v2"; // Bump version untuk rating
-const CACHE_KEY_HOME_DATA = "home_data_cache_v5"; // Bump version
+const CACHE_KEY_STORE = "store_config_cache_v2";
+const CACHE_KEY_HOME_DATA = "home_data_cache_v5";
 
-export default function Home() {
+// --- KOMPONEN UTAMA (LOGIC) ---
+function HomeContent() {
   const { addToCart } = useCart();
   const [isPending, startTransition] = useTransition();
+  const searchParams = useSearchParams();
+  const router = useRouter();
 
-  // REFS (Untuk Auto Scroll)
+  // REFS
   const topRef = useRef<HTMLDivElement>(null);
   const pedasRef = useRef<HTMLDivElement>(null);
   const segarRef = useRef<HTMLDivElement>(null);
@@ -108,25 +140,26 @@ export default function Home() {
   const [cemilanItems, setCemilanItems] = useState<HomeMenuItem[]>([]);
   const [promos, setPromos] = useState<Promo[]>([]);
 
-  // STATE STORE (Include Rating)
-  const [storeInfo, setStoreInfo] = useState<StoreInfo>(() => {
-    if (typeof window !== "undefined") {
-      const cached = sessionStorage.getItem(CACHE_KEY_STORE);
-      if (cached) return JSON.parse(cached);
-    }
-    return {
-      name: "Angkringan Mas Radit",
-      address: "Memuat lokasi...",
-      open_hour: null,
-      close_hour: null,
-      running_text: "Selamat Datang!",
-      isOpenNow: false,
-      ratingAvg: "5.0",
-      ratingCount: 0,
-    };
+  // STATE STORE
+  const [storeInfo, setStoreInfo] = useState<StoreInfo>({
+    name: "Angkringan Mas Radit",
+    address: "Memuat...",
+    open_hour: null,
+    close_hour: null,
+    running_text: "Selamat Datang!",
+    isOpenNow: false,
+    ratingAvg: "5.0",
+    ratingCount: 0,
   });
 
-  // STATE UX
+  // STATE UX & TABLE
+  const [activeTable, setActiveTable] = useState<{
+    id: number;
+    number: string;
+    section: string;
+  } | null>(null);
+  const [isTableValidating, setIsTableValidating] = useState(false);
+
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [heroIndex, setHeroIndex] = useState(0);
   const [greeting, setGreeting] = useState("Halo");
@@ -137,144 +170,227 @@ export default function Home() {
   );
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // FETCH DATA (OPTIMIZED LIMIT 7 + REVIEWS)
-  const fetchData = useCallback(async (forceRefresh = false) => {
-    // 1. Cek Cache
-    if (!forceRefresh && typeof window !== "undefined") {
-      const cachedHome = sessionStorage.getItem(CACHE_KEY_HOME_DATA);
-      if (cachedHome) {
-        try {
-          const parsed = JSON.parse(cachedHome);
-          setRecommendedItems(parsed.recommendedItems || []);
-          setNewItems(parsed.newItems || []);
-          setPromos(parsed.promos || []);
-          setPedasItems(parsed.pedasItems || []);
-          setSegarItems(parsed.segarItems || []);
-          setKenyangItems(parsed.kenyangItems || []);
-          setCemilanItems(parsed.cemilanItems || []);
+  // --- MEMOIZED HELPERS ---
+  const formatMenuItem = useCallback(
+    (item: any): HomeMenuItem => ({
+      id: item.id.toString(),
+      name: item.name,
+      description: item.description || "Menu lezat!",
+      price: item.price,
+      originalPrice: item.original_price || 0,
+      rating: item.rating_avg || 5.0,
+      ratingCount: item.rating_count || 0,
+      image: item.image_url || "",
+      isAvailable: item.is_available ?? true,
+    }),
+    [],
+  );
+
+  // --- 1. LOGIC SMART TABLE SCANNER 🧠 ---
+  useEffect(() => {
+    const handleTableScan = async () => {
+      const tableId = searchParams.get("table");
+      const tableToken = searchParams.get("token");
+      const savedTable = sessionStorage.getItem("active_table_session");
+
+      if (savedTable && !tableId) {
+        setActiveTable(JSON.parse(savedTable));
+        return;
+      }
+
+      if (tableId && tableToken) {
+        setIsTableValidating(true);
+        const { data, error } = await supabase
+          .from("tables")
+          .select("id, table_number, section, qr_token")
+          .eq("id", tableId)
+          .eq("qr_token", tableToken)
+          .single();
+
+        if (data && !error) {
+          const tableData = {
+            id: data.id,
+            number: data.table_number,
+            section: data.section,
+          };
+          setActiveTable(tableData);
+          sessionStorage.setItem(
+            "active_table_session",
+            JSON.stringify(tableData),
+          );
+          localStorage.setItem("customer_table_id", data.id.toString());
+          // Update status occupied
+          await supabase
+            .from("tables")
+            .update({ status: "occupied" })
+            .eq("id", data.id);
+
+          toast.success(`Berhasil check-in di ${data.table_number}!`, {
+            icon: "✅",
+          });
+          router.replace("/");
+        } else {
+          toast.error("QR Code tidak valid atau kadaluarsa!", { icon: "🚫" });
+        }
+        setIsTableValidating(false);
+      }
+    };
+
+    handleTableScan();
+  }, [searchParams, router]);
+
+  // --- 2. FETCH DATA (FULL CACHE OPTIMIZED) ---
+  const fetchData = useCallback(
+    async (forceRefresh = false) => {
+      if (!forceRefresh && typeof window !== "undefined") {
+        let hasMenuData = false;
+        let hasStoreData = false;
+
+        // Cache Menu
+        const cachedHome = sessionStorage.getItem(CACHE_KEY_HOME_DATA);
+        if (cachedHome) {
+          try {
+            const parsed = JSON.parse(cachedHome);
+            setRecommendedItems(parsed.recommendedItems || []);
+            setNewItems(parsed.newItems || []);
+            setPromos(parsed.promos || []);
+            setPedasItems(parsed.pedasItems || []);
+            setSegarItems(parsed.segarItems || []);
+            setKenyangItems(parsed.kenyangItems || []);
+            setCemilanItems(parsed.cemilanItems || []);
+            hasMenuData = true;
+          } catch (e) {}
+        }
+
+        // Cache Store Info
+        const cachedStore = sessionStorage.getItem(CACHE_KEY_STORE);
+        if (cachedStore) {
+          try {
+            setStoreInfo(JSON.parse(cachedStore));
+            hasStoreData = true;
+          } catch (e) {}
+        }
+
+        if (hasMenuData && hasStoreData) {
           setIsInitialLoading(false);
-        } catch (e) {
-          console.error("Cache error", e);
         }
       }
-    }
 
-    try {
-      const LIMIT_COUNT = 7;
+      try {
+        const LIMIT_COUNT = 7;
+        const [
+          recRes,
+          newRes,
+          promoRes,
+          configRes,
+          pedasRes,
+          segarRes,
+          kenyangRes,
+          cemilanRes,
+          reviewsRes,
+        ] = await Promise.all([
+          supabase
+            .from("menu_items")
+            .select("*")
+            .eq("is_available", true)
+            .eq("is_recommended", true)
+            .limit(LIMIT_COUNT),
+          supabase
+            .from("menu_items")
+            .select("*")
+            .eq("is_available", true)
+            .order("id", { ascending: false })
+            .limit(LIMIT_COUNT),
+          supabase.from("promos").select("*").eq("is_active", true),
+          supabase.from("store_config").select("*").single(),
+          supabase
+            .from("menu_items")
+            .select("*")
+            .eq("is_available", true)
+            .contains("tags", ["Pedas"])
+            .limit(LIMIT_COUNT),
+          supabase
+            .from("menu_items")
+            .select("*")
+            .eq("is_available", true)
+            .eq("category_id", 3)
+            .limit(LIMIT_COUNT),
+          supabase
+            .from("menu_items")
+            .select("*")
+            .eq("is_available", true)
+            .contains("tags", ["Berat"])
+            .limit(LIMIT_COUNT),
+          supabase
+            .from("menu_items")
+            .select("*")
+            .eq("is_available", true)
+            .eq("category_id", 4)
+            .limit(LIMIT_COUNT),
+          supabase.from("reviews").select("rating"),
+        ]);
 
-      const [
-        recRes, // Paling Laris
-        newRes, // Baru
-        promoRes,
-        configRes,
-        pedasRes, // Tag: Pedas
-        segarRes, // Kategori: Minuman
-        kenyangRes, // Tag: Berat
-        cemilanRes, // Kategori: Cemilan
-        reviewsRes, // NEW: Fetch Rating Toko
-      ] = await Promise.all([
-        supabase
-          .from("menu_items")
-          .select("*")
-          .eq("is_available", true)
-          .eq("is_recommended", true)
-          .limit(LIMIT_COUNT),
-        supabase
-          .from("menu_items")
-          .select("*")
-          .eq("is_available", true)
-          .order("id", { ascending: false })
-          .limit(LIMIT_COUNT),
-        supabase.from("promos").select("*").eq("is_active", true),
-        supabase.from("store_config").select("*").single(),
-
-        supabase
-          .from("menu_items")
-          .select("*")
-          .eq("is_available", true)
-          .contains("tags", ["Pedas"])
-          .limit(LIMIT_COUNT),
-        supabase
-          .from("menu_items")
-          .select("*")
-          .eq("is_available", true)
-          .eq("category_id", 3)
-          .limit(LIMIT_COUNT),
-        supabase
-          .from("menu_items")
-          .select("*")
-          .eq("is_available", true)
-          .contains("tags", ["Berat"])
-          .limit(LIMIT_COUNT),
-        supabase
-          .from("menu_items")
-          .select("*")
-          .eq("is_available", true)
-          .eq("category_id", 4)
-          .limit(LIMIT_COUNT),
-        supabase.from("reviews").select("rating"), // Ambil rating saja biar ringan
-      ]);
-
-      const fmt = (data: any[]) => (data ? data.map(formatMenuItem) : []);
-
-      const newData = {
-        recommendedItems: fmt(recRes.data || []),
-        newItems: fmt(newRes.data || []),
-        promos: promoRes.data || [],
-        pedasItems: fmt(pedasRes.data || []),
-        segarItems: fmt(segarRes.data || []),
-        kenyangItems: fmt(kenyangRes.data || []),
-        cemilanItems: fmt(cemilanRes.data || []),
-      };
-
-      setRecommendedItems(newData.recommendedItems);
-      setNewItems(newData.newItems);
-      setPromos(newData.promos);
-      setPedasItems(newData.pedasItems);
-      setSegarItems(newData.segarItems);
-      setKenyangItems(newData.kenyangItems);
-      setCemilanItems(newData.cemilanItems);
-
-      sessionStorage.setItem(CACHE_KEY_HOME_DATA, JSON.stringify(newData));
-
-      // CALCULATE RATING
-      const allRatings = reviewsRes.data || [];
-      const totalRating = allRatings.reduce(
-        (acc, curr) => acc + curr.rating,
-        0,
-      );
-      const avgRating =
-        allRatings.length > 0
-          ? (totalRating / allRatings.length).toFixed(1)
-          : "5.0";
-
-      if (configRes.data) {
-        const now = new Date();
-        const currentTime = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`;
-        const newStoreInfo = {
-          name: configRes.data.store_name || "Angkringan Mas Radit",
-          address: configRes.data.address || "Jl. Malioboro No. 1",
-          open_hour: configRes.data.open_hour || "17:00",
-          close_hour: configRes.data.close_hour || "23:59",
-          running_text: configRes.data.running_text || "Selamat Datang!",
-          isOpenNow:
-            currentTime >= (configRes.data.open_hour || "17:00") &&
-            currentTime <= (configRes.data.close_hour || "23:59"),
-          ratingAvg: avgRating,
-          ratingCount: allRatings.length,
+        const fmt = (data: any[]) => (data ? data.map(formatMenuItem) : []);
+        const newData = {
+          recommendedItems: fmt(recRes.data || []),
+          newItems: fmt(newRes.data || []),
+          promos: promoRes.data || [],
+          pedasItems: fmt(pedasRes.data || []),
+          segarItems: fmt(segarRes.data || []),
+          kenyangItems: fmt(kenyangRes.data || []),
+          cemilanItems: fmt(cemilanRes.data || []),
         };
-        setStoreInfo(newStoreInfo);
-        sessionStorage.setItem(CACHE_KEY_STORE, JSON.stringify(newStoreInfo));
+
+        setRecommendedItems(newData.recommendedItems);
+        setNewItems(newData.newItems);
+        setPromos(newData.promos);
+        setPedasItems(newData.pedasItems);
+        setSegarItems(newData.segarItems);
+        setKenyangItems(newData.kenyangItems);
+        setCemilanItems(newData.cemilanItems);
+        sessionStorage.setItem(CACHE_KEY_HOME_DATA, JSON.stringify(newData));
+
+        const allRatings = reviewsRes.data || [];
+        const avgRating =
+          allRatings.length > 0
+            ? (
+                allRatings.reduce((a, b) => a + b.rating, 0) / allRatings.length
+              ).toFixed(1)
+            : "5.0";
+
+        if (configRes.data) {
+          const now = new Date();
+          const currentTime = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`;
+
+          const open = configRes.data.open_hour || "17:00";
+          const close = configRes.data.close_hour || "23:59";
+          const isOpen = currentTime >= open && currentTime <= close;
+
+          const newStoreInfo = {
+            name: configRes.data.store_name || "Angkringan Mas Radit",
+            address: configRes.data.address || "Jl. Malioboro No. 1",
+            open_hour: open,
+            close_hour: close,
+            running_text:
+              configRes.data.running_text ||
+              "Selamat Datang di Angkringan Digital!",
+            isOpenNow: isOpen,
+            ratingAvg: avgRating,
+            ratingCount: allRatings.length,
+          };
+          setStoreInfo(newStoreInfo);
+          sessionStorage.setItem(CACHE_KEY_STORE, JSON.stringify(newStoreInfo));
+        }
+      } catch (err) {
+        console.error("Fetch Error:", err);
+      } finally {
+        setIsInitialLoading(false);
       }
-    } catch (err) {
-      console.error("Fetch Error:", err);
-    } finally {
-      setIsInitialLoading(false);
-    }
-  }, []);
+    },
+    [formatMenuItem],
+  );
 
   useEffect(() => {
-    // Logic Sapaan
     const h = new Date().getHours();
     setGreeting(
       h < 11
@@ -285,50 +401,22 @@ export default function Home() {
             ? "Selamat Sore 🌇"
             : "Selamat Malam 🌙",
     );
-
-    // Logic Back to Top Button
-    const handleScroll = () => {
-      if (window.scrollY > 300) {
-        setShowScrollTop(true);
-      } else {
-        setShowScrollTop(false);
-      }
-    };
+    const handleScroll = () => setShowScrollTop(window.scrollY > 300);
     window.addEventListener("scroll", handleScroll, { passive: true });
-
-    // Hero Carousel
     const interval = setInterval(
       () => setHeroIndex((prev) => (prev + 1) % HERO_IMAGES.length),
       5000,
     );
-
     fetchData();
-
     return () => {
       clearInterval(interval);
       window.removeEventListener("scroll", handleScroll);
     };
   }, [fetchData]);
 
-  const formatMenuItem = (item: any): HomeMenuItem => ({
-    id: item.id.toString(),
-    name: item.name,
-    description: item.description || "Menu lezat!",
-    price: item.price,
-    originalPrice: item.original_price || 0,
-    rating: item.rating_avg || 5.0,
-    ratingCount: item.rating_count || 0,
-    image: item.image_url || "",
-    isAvailable: item.is_available ?? true,
-  });
-
-  const scrollToRef = (ref: React.RefObject<HTMLDivElement | null>) => {
+  const scrollToRef = (ref: React.RefObject<HTMLDivElement | null>) =>
     ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-
-  const scrollToTop = () => {
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
+  const scrollToTop = () => window.scrollTo({ top: 0, behavior: "smooth" });
 
   const handleProductClick = useCallback((product: HomeMenuItem) => {
     if (!product.isAvailable) {
@@ -355,7 +443,15 @@ export default function Home() {
     [addToCart, lastClickTime],
   );
 
-  // Component Carousel (Reusable)
+  const handleLeaveTable = () => {
+    if (confirm("Tinggalkan meja ini?")) {
+      setActiveTable(null);
+      sessionStorage.removeItem("active_table_session");
+      localStorage.removeItem("customer_table_id");
+      toast.info("Anda keluar dari mode meja.");
+    }
+  };
+
   const SectionCarousel = ({
     title,
     items,
@@ -368,13 +464,11 @@ export default function Home() {
     refObj?: any;
   }) => {
     const scrollRef = useRef<HTMLDivElement>(null);
-    const scroll = (direction: "left" | "right") => {
-      if (scrollRef.current) {
-        const { current } = scrollRef;
-        const scrollAmount = direction === "left" ? -200 : 200;
-        current.scrollBy({ left: scrollAmount, behavior: "smooth" });
-      }
-    };
+    const scroll = (direction: "left" | "right") =>
+      scrollRef.current?.scrollBy({
+        left: direction === "left" ? -200 : 200,
+        behavior: "smooth",
+      });
     const showSkeleton = isInitialLoading && items.length === 0;
 
     return (
@@ -391,8 +485,6 @@ export default function Home() {
             Lihat Semua <ArrowRight size={10} />
           </Link>
         </div>
-
-        {/* Navigasi Desktop */}
         <div className="absolute top-1/2 -translate-y-1/2 left-2 z-20 hidden md:group-hover/section:block">
           <button
             onClick={() => scroll("left")}
@@ -409,7 +501,6 @@ export default function Home() {
             <ChevronRight size={20} />
           </button>
         </div>
-
         <div
           ref={scrollRef}
           className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide snap-x snap-mandatory"
@@ -449,7 +540,12 @@ export default function Home() {
 
   return (
     <MobileLayout>
-      {/* --- SEO JSON-LD INJECTION (OPTIMASI SEO & TWA) --- */}
+      {/* INJECT STYLE MARQUEE DI SINI */}
+      <style jsx global>
+        {MARQUEE_STYLE}
+      </style>
+
+      {/* --- SEO --- */}
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{
@@ -488,6 +584,50 @@ export default function Home() {
         }}
       />
 
+      {/* --- FLOATING TABLE BANNER --- */}
+      {isTableValidating ? (
+        <div className="fixed top-20 left-4 right-4 z-50 bg-black/80 backdrop-blur-xl p-4 rounded-2xl border border-orange-500/50 flex items-center gap-3 animate-in slide-in-from-top-5 shadow-2xl">
+          <div className="bg-orange-500/20 p-2 rounded-full">
+            <Loader2 className="animate-spin text-orange-500" size={20} />
+          </div>
+          <div className="flex-1">
+            <p className="text-white font-bold text-sm">
+              Memverifikasi Meja...
+            </p>
+            <p className="text-[10px] text-zinc-400">Mohon tunggu sebentar</p>
+          </div>
+        </div>
+      ) : (
+        activeTable && (
+          <div className="fixed top-16 left-4 right-4 z-40 animate-in slide-in-from-top-5 duration-500">
+            <div className="bg-zinc-900/90 backdrop-blur-md border border-emerald-500/30 p-3 rounded-2xl shadow-2xl shadow-emerald-900/20 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="bg-emerald-500/20 p-2.5 rounded-xl border border-emerald-500/20">
+                  <QrCode className="text-emerald-400" size={20} />
+                </div>
+                <div>
+                  <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider mb-0.5 flex items-center gap-1">
+                    <CheckCircle2 size={10} /> TERHUBUNG
+                  </p>
+                  <p className="text-white font-black text-sm">
+                    {activeTable.number}{" "}
+                    <span className="text-zinc-500 font-normal text-[10px]">
+                      ({activeTable.section})
+                    </span>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleLeaveTable}
+                className="bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 p-2 rounded-full transition-colors active:scale-95"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          </div>
+        )
+      )}
+
       {/* HERO SECTION */}
       <section
         ref={topRef}
@@ -525,11 +665,9 @@ export default function Home() {
                   ></span>
                 </span>
                 <span className="text-[10px] font-bold uppercase tracking-wider">
-                  {storeInfo.isOpenNow ? "Buka Sekarang" : "Tutup"}
+                  {storeInfo.isOpenNow ? "Buka" : "Tutup"}
                 </span>
               </div>
-
-              {/* FITUR BARU: RATING BADGE DI HERO */}
               <Link href="/story" className="animate-in fade-in zoom-in">
                 <div className="px-3 py-1.5 rounded-full flex items-center gap-1.5 border border-yellow-500/30 bg-yellow-500/10 text-yellow-400 backdrop-blur-md hover:bg-yellow-500/20 transition-colors active:scale-95 cursor-pointer">
                   <Star size={12} className="fill-yellow-400" />
@@ -542,7 +680,6 @@ export default function Home() {
                 </div>
               </Link>
             </div>
-
             {storeInfo.open_hour && (
               <div className="text-[10px] text-zinc-300 bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 font-medium animate-in fade-in">
                 {storeInfo.open_hour.slice(0, 5)} -{" "}
@@ -568,19 +705,22 @@ export default function Home() {
         </div>
       </section>
 
-      {/* RUNNING TEXT */}
+      {/* RUNNING TEXT (OPTIMIZED MARQUEE) */}
       <div className="bg-zinc-900 border-b border-white/5 h-10 flex items-center relative overflow-hidden">
-        <div className="h-full bg-orange-500 px-3 flex items-center justify-center z-10 shadow-lg">
+        <div className="h-full bg-orange-500 px-3 flex items-center justify-center z-10 shadow-lg relative">
           <Megaphone size={16} className="text-white animate-pulse" />
         </div>
         <div className="flex-1 overflow-hidden relative h-full flex items-center">
-          <div className="whitespace-nowrap animate-marquee flex items-center">
-            <span className="text-xs font-medium text-orange-200 mx-8 flex items-center gap-2">
-              📢 {storeInfo.running_text}
-            </span>
-            <span className="text-xs font-medium text-orange-200 mx-8 flex items-center gap-2">
-              📢 {storeInfo.running_text}
-            </span>
+          <div className="animate-marquee-smooth flex items-center">
+            {/* Duplikasi Teks agar Seamless Loop */}
+            {[1, 2, 3, 4].map((i) => (
+              <span
+                key={i}
+                className="text-xs font-medium text-orange-200 mx-8 flex items-center gap-2 whitespace-nowrap"
+              >
+                📢 {storeInfo.running_text}
+              </span>
+            ))}
           </div>
         </div>
       </div>
@@ -750,7 +890,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* DYNAMIC SECTIONS */}
       <SectionCarousel
         title="Baru Mateng ♨️"
         items={newItems}
@@ -802,7 +941,6 @@ export default function Home() {
             </Button>
           </div>
         </div>
-
         <div className="bg-zinc-900/30 border border-white/5 rounded-2xl p-5 space-y-4">
           <h3 className="text-white font-bold text-sm flex items-center gap-2 mb-2">
             <HelpCircle size={16} className="text-orange-500" /> FAQ Singkat
@@ -833,7 +971,7 @@ export default function Home() {
         </div>
       </section>
 
-      {/* BACK TO TOP BUTTON */}
+      {/* BACK TO TOP */}
       <button
         onClick={scrollToTop}
         className={`fixed bottom-24 right-5 z-40 bg-zinc-900 border border-zinc-700 text-white p-2 rounded-full shadow-lg transition-all duration-300 ${showScrollTop ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10 pointer-events-none"}`}
@@ -850,5 +988,20 @@ export default function Home() {
         />
       )}
     </MobileLayout>
+  );
+}
+
+// --- MAIN PAGE WRAPPER (Wajib Suspense untuk useSearchParams) ---
+export default function Home() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-black flex items-center justify-center">
+          <Loader2 className="animate-spin text-orange-500" size={32} />
+        </div>
+      }
+    >
+      <HomeContent />
+    </Suspense>
   );
 }

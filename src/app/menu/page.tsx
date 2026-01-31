@@ -15,11 +15,18 @@ import {
   List as ListIcon,
   Check,
   Zap,
-  QrCode,
   ArrowDown,
+  CheckCircle2, // Icon Validasi
 } from "lucide-react";
-import { useState, useEffect, useCallback, Suspense, useRef } from "react";
-import { useSearchParams } from "next/navigation";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  Suspense,
+  useRef,
+  useTransition,
+} from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
   Popover,
@@ -63,8 +70,16 @@ const CACHE_KEY_MENU = "menu_items_cache";
 function MenuContent() {
   const { addToCart } = useCart();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition(); // Optimasi State Transition
 
-  // STATE
+  // STATE TABLE SESSION
+  const [activeTable, setActiveTable] = useState<{
+    id: number;
+    number: string;
+  } | null>(null);
+
+  // STATE MENU
   const [dbMenuItems, setDbMenuItems] = useState<ExtendedMenuItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -87,7 +102,65 @@ function MenuContent() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [lastClickTime, setLastClickTime] = useState(0);
 
-  // FETCH DATA
+  // --- 1. LOGIC SMART TABLE CHECK (SINKRON QR & DB) ---
+  useEffect(() => {
+    const checkTableSession = async () => {
+      // A. Cek URL Params (Siapa tau scan langsung ke halaman menu)
+      const tableId = searchParams.get("table");
+      const tableToken = searchParams.get("token");
+
+      // B. Cek Session Storage (Sisa dari Home)
+      const savedTable = sessionStorage.getItem("active_table_session");
+
+      if (savedTable && !tableId) {
+        setActiveTable(JSON.parse(savedTable));
+        return;
+      }
+
+      // C. Jika Scan Baru di Halaman Menu
+      if (tableId && tableToken) {
+        const { data, error } = await supabase
+          .from("tables")
+          .select("id, table_number, section, qr_token")
+          .eq("id", tableId)
+          .eq("qr_token", tableToken)
+          .single();
+
+        if (data && !error) {
+          const tableData = {
+            id: data.id,
+            number: data.table_number,
+            section: data.section,
+          };
+          setActiveTable(tableData);
+          sessionStorage.setItem(
+            "active_table_session",
+            JSON.stringify(tableData),
+          );
+          localStorage.setItem("customer_table_id", data.id.toString());
+
+          // Update Status DB
+          await supabase
+            .from("tables")
+            .update({ status: "occupied" })
+            .eq("id", data.id);
+
+          toast.success(`Terhubung ke ${data.table_number}`, {
+            icon: <CheckCircle2 className="text-emerald-500" />,
+          });
+
+          // Bersihkan URL
+          router.replace("/menu");
+        } else {
+          toast.error("QR Code tidak valid!");
+        }
+      }
+    };
+
+    checkTableSession();
+  }, [searchParams, router]);
+
+  // --- 2. FETCH MENU (CACHE FIRST STRATEGY) ---
   const fetchMenu = useCallback(async (forceRefresh = false) => {
     if (forceRefresh) setIsRefreshing(true);
 
@@ -103,8 +176,8 @@ function MenuContent() {
     }
 
     try {
-      // Simulasi delay sedikit biar animasi refresh kelihatan (UX)
-      if (forceRefresh) await new Promise((r) => setTimeout(r, 800));
+      // Delay kosmetik saat pull refresh agar user "merasa" loading
+      if (forceRefresh) await new Promise((r) => setTimeout(r, 500));
 
       const { data, error } = await supabase
         .from("menu_items")
@@ -131,12 +204,11 @@ function MenuContent() {
       }
     } catch (err) {
       console.error("Gagal ambil menu:", err);
-      // Silent error jika refresh, toast jika initial load gagal
       if (!forceRefresh) toast.error("Gagal memuat menu.");
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
-      setPullY(0); // Reset posisi pull
+      setPullY(0);
     }
   }, []);
 
@@ -144,7 +216,7 @@ function MenuContent() {
     fetchMenu();
   }, [fetchMenu]);
 
-  // --- LOGIC PULL TO REFRESH MANUAL ---
+  // --- 3. GESTURE PULL TO REFRESH ---
   useEffect(() => {
     const handleTouchStart = (e: TouchEvent) => {
       if (window.scrollY === 0) {
@@ -157,11 +229,8 @@ function MenuContent() {
       if (!isPulling.current) return;
       const currentY = e.touches[0].clientY;
       const delta = currentY - startY.current;
-
-      // Hanya izinkan tarik jika scroll paling atas dan tarik ke bawah
       if (window.scrollY === 0 && delta > 0) {
-        // Logarithmic resistance (makin ditarik makin berat)
-        setPullY(Math.min(delta * 0.4, 120));
+        setPullY(Math.min(delta * 0.4, 120)); // Resistance efffect
       } else {
         setPullY(0);
       }
@@ -170,10 +239,9 @@ function MenuContent() {
     const handleTouchEnd = () => {
       isPulling.current = false;
       if (pullY > 60) {
-        // Threshold refresh
-        fetchMenu(true); // Trigger refresh
+        fetchMenu(true);
       } else {
-        setPullY(0); // Batal refresh
+        setPullY(0);
       }
     };
 
@@ -206,7 +274,7 @@ function MenuContent() {
       return parseInt(b.id) - parseInt(a.id);
     });
 
-  // UX Scroll Top
+  // UX HANDLERS
   useEffect(() => {
     const handleScroll = () => setShowScrollTop(window.scrollY > 300);
     window.addEventListener("scroll", handleScroll, { passive: true });
@@ -218,27 +286,37 @@ function MenuContent() {
       toast.error("Maaf, menu ini habis! 😭");
       return;
     }
-    setSelectedProduct(product);
-    setIsModalOpen(true);
+    startTransition(() => {
+      setSelectedProduct(product);
+      setIsModalOpen(true);
+    });
   }, []);
 
   const handleQuickAdd = useCallback(
     (e: React.MouseEvent, product: ExtendedMenuItem) => {
       e.stopPropagation();
       const now = Date.now();
-      if (now - lastClickTime < 400) return;
+      if (now - lastClickTime < 400) return; // Debounce klik barbar
       setLastClickTime(now);
+
       if (!product.isAvailable) return;
+
       addToCart(product);
       if (navigator.vibrate) navigator.vibrate(50);
-      toast.success("Masuk keranjang! 🛒");
+
+      // Jika ada meja aktif, custom notifnya
+      const message = activeTable
+        ? "Masuk Cart (Meja " + activeTable.number + ") 🛒"
+        : "Masuk keranjang! 🛒";
+
+      toast.success(message);
     },
-    [addToCart, lastClickTime],
+    [addToCart, lastClickTime, activeTable],
   );
 
   return (
     <>
-      {/* PULL TO REFRESH INDICATOR */}
+      {/* PULL INDICATOR */}
       <div
         className="fixed top-20 left-0 w-full flex justify-center z-30 pointer-events-none transition-transform duration-200"
         style={{ transform: `translateY(${pullY > 0 ? pullY - 40 : -100}px)` }}
@@ -263,17 +341,20 @@ function MenuContent() {
         <div className="pt-4 px-5 pb-3">
           <div className="flex justify-between items-center mb-3">
             <div>
-              <h1 className="text-xl font-bold text-white leading-none">
+              <h1 className="text-xl font-bold text-white leading-none flex items-center gap-2">
                 Daftar Menu 📜
               </h1>
-              <p className="text-[10px] text-zinc-500 mt-1">
-                {dbMenuItems.length > 0
-                  ? `${dbMenuItems.length} menu tersedia`
-                  : "Memuat menu..."}
+              <p className="text-[10px] text-zinc-500 mt-1 flex items-center gap-1">
+                {activeTable ? (
+                  <span className="text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                    ● {activeTable.number} Aktif
+                  </span>
+                ) : (
+                  "Silakan pilih menu"
+                )}
               </p>
             </div>
 
-            {/* TOMBOL REFRESH DIHAPUS, DIGANTI VIEW MODE SAJA */}
             <div className="flex bg-zinc-900 p-1 rounded-xl border border-zinc-800">
               <button
                 onClick={() => setViewMode("grid")}
@@ -381,7 +462,6 @@ function MenuContent() {
       <div className="p-5 min-h-screen pb-32">
         {isLoading && dbMenuItems.length === 0 ? (
           <div className="grid grid-cols-2 gap-4">
-            {/* SKELETON DIUPDATE JADI KOTAK BESAR (H-64) BIAR SESUAI CARD BARU */}
             {Array.from({ length: 6 }).map((_, i) => (
               <Skeleton
                 key={i}
@@ -453,6 +533,7 @@ function MenuContent() {
   );
 }
 
+// MAIN WRAPPER
 export default function MenuPage() {
   return (
     <MobileLayout>

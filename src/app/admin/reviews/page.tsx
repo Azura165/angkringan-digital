@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  useState,
-  useEffect,
-  useMemo,
-  useCallback,
-  memo,
-  useTransition,
-} from "react";
+import { useState, useEffect, useMemo, useCallback, memo } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   Star,
@@ -20,6 +13,9 @@ import {
   Reply,
   ChevronDown,
   AlertTriangle,
+  X,
+  Maximize2,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +30,20 @@ import {
 import { toast } from "sonner";
 import Image from "next/image";
 
+// --- CONFIG ---
+const CACHE_KEY = "admin_reviews_cache_v1";
+const ITEMS_PER_PAGE = 20;
+
+// --- HOOK: DEBOUNCE ---
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+  return debouncedValue;
+}
+
 // --- TYPES ---
 interface Review {
   id: number;
@@ -46,8 +56,6 @@ interface Review {
   menu_id?: number;
   menu_items?: { name: string; image: string };
 }
-
-const ITEMS_PER_PAGE = 10;
 
 // --- UTILS ---
 const RatingStars = memo(({ rating }: { rating: number }) => (
@@ -64,23 +72,16 @@ const RatingStars = memo(({ rating }: { rating: number }) => (
 RatingStars.displayName = "RatingStars";
 
 const timeAgo = (dateStr: string) => {
-  const seconds = Math.floor(
+  const diff = Math.floor(
     (new Date().getTime() - new Date(dateStr).getTime()) / 1000,
   );
-  let interval = seconds / 31536000;
-  if (interval > 1) return Math.floor(interval) + " thn lalu";
-  interval = seconds / 2592000;
-  if (interval > 1) return Math.floor(interval) + " bln lalu";
-  interval = seconds / 86400;
-  if (interval > 1) return Math.floor(interval) + " hr lalu";
-  interval = seconds / 3600;
-  if (interval > 1) return Math.floor(interval) + " jam lalu";
-  interval = seconds / 60;
-  if (interval > 1) return Math.floor(interval) + " mnt lalu";
-  return "Baru saja";
+  if (diff < 60) return "Baru saja";
+  if (diff < 3600) return `${Math.floor(diff / 60)} mnt lalu`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} jam lalu`;
+  return `${Math.floor(diff / 86400)} hari lalu`;
 };
 
-// --- OPTIMIZED COMPONENT: REVIEW CARD ---
+// --- COMPONENT: REVIEW CARD (MEMOIZED) ---
 const ReviewCard = memo(
   ({
     review,
@@ -88,28 +89,42 @@ const ReviewCard = memo(
     onToggleFeatured,
     onDelete,
     onReply,
+    onImageClick,
   }: {
     review: Review;
     showMenuContext: boolean;
     onToggleFeatured: (id: number, status: boolean) => void;
     onDelete: (id: number) => void;
     onReply: (review: Review) => void;
+    onImageClick: (url: string) => void;
   }) => {
     return (
       <div
-        className={`p-4 rounded-2xl border transition-all duration-300 hover:scale-[1.01] active:scale-[0.99] ${review.is_featured ? "bg-zinc-900/80 border-red-500/30 shadow-lg shadow-red-900/10" : "bg-zinc-900/40 border-white/5"}`}
+        className={`p-4 rounded-2xl border transition-all duration-200 hover:border-zinc-600 flex flex-col h-full ${review.is_featured ? "bg-zinc-900/80 border-red-500/30 shadow-lg shadow-red-900/10" : "bg-zinc-900/40 border-white/5"}`}
       >
+        {/* Menu Context */}
         {showMenuContext && review.menu_items && (
           <div className="flex items-center gap-3 mb-3 pb-3 border-b border-dashed border-white/10">
-            <div className="relative w-8 h-8 rounded-lg overflow-hidden bg-zinc-800 border border-white/10 shrink-0">
+            <div
+              onClick={() =>
+                review.menu_items?.image &&
+                onImageClick(review.menu_items.image)
+              }
+              className="relative w-8 h-8 rounded-lg overflow-hidden bg-zinc-800 border border-white/10 shrink-0 cursor-zoom-in group"
+            >
               {review.menu_items.image ? (
-                <Image
-                  src={review.menu_items.image}
-                  alt="menu"
-                  fill
-                  className="object-cover"
-                  sizes="32px"
-                />
+                <>
+                  <Image
+                    src={review.menu_items.image}
+                    alt="menu"
+                    fill
+                    className="object-cover transition-transform group-hover:scale-110"
+                    sizes="32px"
+                  />
+                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <Maximize2 size={10} className="text-white" />
+                  </div>
+                </>
               ) : (
                 <Utensils className="m-auto text-zinc-600" size={12} />
               )}
@@ -120,6 +135,7 @@ const ReviewCard = memo(
           </div>
         )}
 
+        {/* User Info */}
         <div className="flex justify-between items-start mb-2">
           <div className="flex items-center gap-2">
             <div
@@ -150,8 +166,7 @@ const ReviewCard = memo(
         <div className="mb-2">
           <RatingStars rating={review.rating} />
         </div>
-
-        <div className="relative pl-3 border-l-2 border-zinc-800 mb-3">
+        <div className="relative pl-3 border-l-2 border-zinc-800 mb-3 flex-1">
           <p className="text-xs text-zinc-300 italic leading-relaxed line-clamp-4">
             "{review.comment}"
           </p>
@@ -171,7 +186,7 @@ const ReviewCard = memo(
           </div>
         ) : null}
 
-        <div className="flex justify-end gap-2 pt-2 border-t border-dashed border-white/5">
+        <div className="flex justify-end gap-2 pt-2 border-t border-dashed border-white/5 mt-auto">
           <Button
             onClick={() => onDelete(review.id)}
             size="sm"
@@ -203,35 +218,38 @@ export default function AdminReviewsPage() {
   const [hasMoreStore, setHasMoreStore] = useState(true);
   const [hasMoreMenu, setHasMoreMenu] = useState(true);
 
-  // Use simple string state for instant switching
+  // UI STATE
   const [activeTab, setActiveTab] = useState<"store" | "menu">("store");
-  const [isPending, startTransition] = useTransition(); // Optimization for concurrent rendering
-
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-
   const [filter, setFilter] = useState<
     "all" | "featured" | "positive" | "negative"
   >("all");
-  const [search, setSearch] = useState("");
 
+  // Search
+  const [rawSearch, setRawSearch] = useState("");
+  const debouncedSearch = useDebounce(rawSearch, 300);
+
+  // Modal & Actions
   const [replyId, setReplyId] = useState<number | null>(null);
   const [replyText, setReplyText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
 
-  // --- INITIAL FETCH (PARALLEL) ---
-  const fetchInitialData = useCallback(async () => {
-    setIsLoading(true);
+  // 1. FETCH DATA (With Cache Logic)
+  const fetchInitialData = useCallback(async (forceRefresh = false) => {
+    if (forceRefresh) setIsLoading(true);
 
     const fetchType = async (isStore: boolean) => {
       let query = supabase
         .from("reviews")
         .select("*, menu_items(name, image)")
         .order("created_at", { ascending: false })
-        .range(0, ITEMS_PER_PAGE - 1);
+        .limit(ITEMS_PER_PAGE);
       if (isStore) query = query.is("menu_id", null);
       else query = query.not("menu_id", "is", null);
       const { data } = await query;
@@ -248,18 +266,89 @@ export default function AdminReviewsPage() {
     setHasMoreStore(storeData.length >= ITEMS_PER_PAGE);
     setHasMoreMenu(menuData.length >= ITEMS_PER_PAGE);
     setIsLoading(false);
+
+    if (forceRefresh) toast.success("Data diperbarui");
   }, []);
 
+  // 2. INIT EFFECT (Load Cache -> Then Fetch)
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const cached = sessionStorage.getItem(CACHE_KEY);
+      if (cached) {
+        try {
+          const { store, menu } = JSON.parse(cached);
+          setStoreReviews(store || []);
+          setMenuReviews(menu || []);
+          setIsLoading(false); // Instan Load!
+        } catch (e) {
+          console.error("Cache Error", e);
+        }
+      }
+    }
+    // Fetch data terbaru di background
     fetchInitialData();
+
+    // Realtime Listener
+    const channel = supabase
+      .channel("admin-reviews-sync-v3")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "reviews" },
+        (payload) => {
+          if (payload.eventType === "INSERT") {
+            const newReview = payload.new as Review;
+            // Fetch detail menu jika ada
+            const fetchDetail = async () => {
+              const { data } = await supabase
+                .from("reviews")
+                .select("*, menu_items(name, image)")
+                .eq("id", newReview.id)
+                .single();
+              if (data) {
+                if (!data.menu_id) setStoreReviews((prev) => [data, ...prev]);
+                else setMenuReviews((prev) => [data, ...prev]);
+                toast.info("Ulasan baru masuk! 🔔");
+              }
+            };
+            fetchDetail();
+          } else if (payload.eventType === "DELETE") {
+            setStoreReviews((prev) =>
+              prev.filter((r) => r.id !== payload.old.id),
+            );
+            setMenuReviews((prev) =>
+              prev.filter((r) => r.id !== payload.old.id),
+            );
+          } else if (payload.eventType === "UPDATE") {
+            const updated = payload.new as Review;
+            const updater = (list: Review[]) =>
+              list.map((r) => (r.id === updated.id ? { ...r, ...updated } : r));
+            setStoreReviews(updater);
+            setMenuReviews(updater);
+          }
+        },
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [fetchInitialData]);
 
-  // Load More Function
+  // 3. CACHE SYNC (Save to Storage on Change)
+  useEffect(() => {
+    if (storeReviews.length > 0 || menuReviews.length > 0) {
+      sessionStorage.setItem(
+        CACHE_KEY,
+        JSON.stringify({ store: storeReviews, menu: menuReviews }),
+      );
+    }
+  }, [storeReviews, menuReviews]);
+
+  // LOAD MORE
   const loadMore = async () => {
     const isStore = activeTab === "store";
     const currentLen = isStore ? storeReviews.length : menuReviews.length;
-
     setLoadingMore(true);
+
     let query = supabase
       .from("reviews")
       .select("*, menu_items(name, image)")
@@ -282,45 +371,12 @@ export default function AdminReviewsPage() {
     setLoadingMore(false);
   };
 
-  // Realtime Update (Sync with Home)
-  useEffect(() => {
-    const channel = supabase
-      .channel("admin-reviews-sync")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "reviews" },
-        (payload) => {
-          if (payload.eventType === "INSERT") {
-            const newReview = payload.new as Review;
-            // Simple logic: insert to top based on type
-            if (!newReview.menu_id)
-              setStoreReviews((prev) => [newReview, ...prev]);
-            else setMenuReviews((prev) => [newReview, ...prev]);
-            toast.info("Ulasan baru masuk! 🔔");
-          } else if (payload.eventType === "DELETE") {
-            setStoreReviews((prev) =>
-              prev.filter((r) => r.id !== payload.old.id),
-            );
-            setMenuReviews((prev) =>
-              prev.filter((r) => r.id !== payload.old.id),
-            );
-          } else if (payload.eventType === "UPDATE") {
-            const updated = payload.new as Review;
-            const updater = (list: Review[]) =>
-              list.map((r) => (r.id === updated.id ? { ...r, ...updated } : r));
-            setStoreReviews(updater);
-            setMenuReviews(updater);
-          }
-        },
-      )
-      .subscribe();
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
+  const handleManualRefresh = () => {
+    setIsRefreshing(true);
+    fetchInitialData(true).then(() => setIsRefreshing(false));
+  };
 
-  // --- ACTIONS ---
-  // FIX: Fungsi ini sebelumnya hilang, sekarang sudah ditambahkan!
+  // HANDLERS
   const handleOpenReply = useCallback((review: Review) => {
     setReplyId(review.id);
     setReplyText(review.reply || "");
@@ -334,17 +390,12 @@ export default function AdminReviewsPage() {
           r.id === id ? { ...r, is_featured: !currentStatus } : r,
         );
       setStoreReviews(updater);
-      setMenuReviews(updater); // Update both lists (safe)
-      if (navigator.vibrate) navigator.vibrate(50);
-      const { error } = await supabase
+      setMenuReviews(updater);
+      await supabase
         .from("reviews")
         .update({ is_featured: !currentStatus })
         .eq("id", id);
-      if (error) toast.error("Gagal update DB");
-      else
-        toast.success(
-          currentStatus ? "Dihapus dari Story" : "Ditambahkan ke Story ❤️",
-        );
+      toast.success(currentStatus ? "Dihapus dari Story" : "Masuk Story ❤️");
     },
     [],
   );
@@ -352,18 +403,10 @@ export default function AdminReviewsPage() {
   const handleConfirmDelete = async () => {
     if (!deleteId) return;
     setIsDeleting(true);
-    if (navigator.vibrate) navigator.vibrate(100);
-    const { error } = await supabase
-      .from("reviews")
-      .delete()
-      .eq("id", deleteId);
-    if (!error) {
-      setStoreReviews((prev) => prev.filter((r) => r.id !== deleteId));
-      setMenuReviews((prev) => prev.filter((r) => r.id !== deleteId));
-      toast.success("Ulasan dihapus");
-    } else {
-      toast.error("Gagal hapus");
-    }
+    await supabase.from("reviews").delete().eq("id", deleteId);
+    setStoreReviews((prev) => prev.filter((r) => r.id !== deleteId));
+    setMenuReviews((prev) => prev.filter((r) => r.id !== deleteId));
+    toast.success("Ulasan dihapus");
     setIsDeleting(false);
     setDeleteId(null);
   };
@@ -382,13 +425,10 @@ export default function AdminReviewsPage() {
       setMenuReviews(updater);
       toast.success("Balasan terkirim!");
       setIsModalOpen(false);
-    } else {
-      toast.error("Gagal kirim.");
-    }
+    } else toast.error("Gagal kirim.");
     setIsSubmitting(false);
   };
 
-  // --- STATS CALCULATION (MEMOIZED) ---
   const activeData = activeTab === "store" ? storeReviews : menuReviews;
 
   const stats = useMemo(() => {
@@ -403,45 +443,28 @@ export default function AdminReviewsPage() {
       count: activeData.filter((r) => Math.round(r.rating) === star).length,
     }));
     return { total, avg, featured, distribution };
-  }, [activeData]); // Only recalc when data changes
+  }, [activeData]);
 
-  // Filtering
   const displayedReviews = useMemo(() => {
     let data = activeData;
     if (filter === "featured") data = data.filter((r) => r.is_featured);
     if (filter === "positive") data = data.filter((r) => r.rating >= 4);
     if (filter === "negative") data = data.filter((r) => r.rating <= 3);
-    if (search) {
-      const q = search.toLowerCase();
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase();
       data = data.filter(
         (r) =>
           r.name.toLowerCase().includes(q) ||
-          r.comment.toLowerCase().includes(q) ||
-          r.menu_items?.name.toLowerCase().includes(q),
+          r.comment.toLowerCase().includes(q),
       );
     }
     return data;
-  }, [activeData, filter, search]);
-
-  const activeReplyReview = useMemo(
-    () =>
-      storeReviews.find((r) => r.id === replyId) ||
-      menuReviews.find((r) => r.id === replyId),
-    [replyId, storeReviews, menuReviews],
-  );
-
-  // Handle Tab Change (Instant)
-  const switchTab = (tab: "store" | "menu") => {
-    startTransition(() => {
-      setActiveTab(tab);
-    });
-  };
+  }, [activeData, filter, debouncedSearch]);
 
   return (
     <div className="space-y-6 pb-24 animate-in fade-in slide-in-from-bottom-2 duration-500">
-      {/* HEADER STATS (MOBILE OPTIMIZED) */}
+      {/* HEADER STATS */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Main Scorecard */}
         <div className="bg-gradient-to-br from-zinc-900 to-black border border-zinc-800 p-5 rounded-2xl flex items-center justify-between relative overflow-hidden shadow-lg">
           <div className="absolute top-0 right-0 w-24 h-24 bg-orange-500/10 rounded-full blur-3xl -mr-5 -mt-5" />
           <div>
@@ -467,7 +490,6 @@ export default function AdminReviewsPage() {
           </div>
         </div>
 
-        {/* Distribution (Hidden on small mobile to save space, visible on MD+) */}
         <div className="bg-zinc-900/50 border border-zinc-800 p-4 rounded-2xl flex flex-col justify-center gap-1.5 hidden sm:flex">
           {stats.distribution.slice(0, 3).map((d) => (
             <div key={d.star} className="flex items-center gap-2 text-xs">
@@ -488,7 +510,6 @@ export default function AdminReviewsPage() {
           ))}
         </div>
 
-        {/* Featured Card */}
         <div className="bg-zinc-900/50 border border-zinc-800 p-5 rounded-2xl flex items-center justify-between md:flex-col md:justify-center md:items-center md:text-center">
           <div className="flex items-center gap-3 md:flex-col md:gap-2">
             <div className="bg-red-500/10 p-2.5 rounded-full text-red-500">
@@ -501,28 +522,36 @@ export default function AdminReviewsPage() {
               <p className="text-[10px] text-zinc-500 mt-0.5">Masuk Story</p>
             </div>
           </div>
-          {/* Mobile Only Extra Info */}
-          <div className="md:hidden text-[10px] text-zinc-600 italic">
-            Konten Pilihan
-          </div>
         </div>
       </div>
 
-      {/* CONTROLS (STICKY) */}
+      {/* CONTROLS */}
       <div className="sticky top-[70px] z-20 bg-zinc-950/90 backdrop-blur-xl py-2 -mx-4 px-4 flex flex-col gap-3 border-b border-white/5 shadow-sm">
-        <div className="bg-zinc-900 p-1 rounded-xl border border-zinc-800 grid grid-cols-2 gap-1">
-          <button
-            onClick={() => switchTab("store")}
-            className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === "store" ? "bg-zinc-800 text-white shadow-sm" : "text-zinc-500 hover:text-zinc-300"}`}
+        <div className="flex gap-2">
+          <div className="bg-zinc-900 p-1 rounded-xl border border-zinc-800 grid grid-cols-2 gap-1 flex-1">
+            <button
+              onClick={() => setActiveTab("store")}
+              className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === "store" ? "bg-zinc-800 text-white shadow-sm" : "text-zinc-500 hover:text-zinc-300"}`}
+            >
+              <Store size={14} /> Toko
+            </button>
+            <button
+              onClick={() => setActiveTab("menu")}
+              className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === "menu" ? "bg-zinc-800 text-white shadow-sm" : "text-zinc-500 hover:text-zinc-300"}`}
+            >
+              <Utensils size={14} /> Menu
+            </button>
+          </div>
+          <Button
+            onClick={handleManualRefresh}
+            variant="outline"
+            className="border-zinc-800 text-zinc-400 h-full w-10 p-0"
           >
-            <Store size={14} /> Toko
-          </button>
-          <button
-            onClick={() => switchTab("menu")}
-            className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === "menu" ? "bg-zinc-800 text-white shadow-sm" : "text-zinc-500 hover:text-zinc-300"}`}
-          >
-            <Utensils size={14} /> Menu
-          </button>
+            <RefreshCw
+              size={16}
+              className={isRefreshing ? "animate-spin" : ""}
+            />
+          </Button>
         </div>
 
         <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pb-1">
@@ -547,13 +576,13 @@ export default function AdminReviewsPage() {
           <Input
             placeholder="Cari ulasan..."
             className="pl-9 bg-zinc-900 border-zinc-800 rounded-xl h-9 text-xs focus:ring-1 focus:ring-orange-500"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={rawSearch}
+            onChange={(e) => setRawSearch(e.target.value)}
           />
         </div>
       </div>
 
-      {/* LIST (INSTANT SWITCH) */}
+      {/* GRID LIST */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 min-h-[300px]">
         {isLoading ? (
           Array.from({ length: 6 }).map((_, i) => (
@@ -571,6 +600,7 @@ export default function AdminReviewsPage() {
               onToggleFeatured={handleToggleFeatured}
               onDelete={setDeleteId}
               onReply={handleOpenReply}
+              onImageClick={setPreviewImage}
             />
           ))
         ) : (
@@ -578,13 +608,13 @@ export default function AdminReviewsPage() {
             <div className="bg-zinc-900 p-4 rounded-full mb-3">
               <Search size={24} className="text-zinc-600" />
             </div>
-            <p className="text-zinc-500 text-xs">Tidak ada ulasan ditemukan.</p>
+            <p className="text-zinc-500 text-xs">Tidak ada ulasan.</p>
           </div>
         )}
       </div>
 
       {!isLoading &&
-        !search &&
+        !debouncedSearch &&
         ((activeTab === "store" && hasMoreStore) ||
           (activeTab === "menu" && hasMoreMenu)) && (
           <div className="flex justify-center pt-4 pb-8">
@@ -610,12 +640,12 @@ export default function AdminReviewsPage() {
           <DialogHeader className="mb-2">
             <DialogTitle className="text-sm">Balas Ulasan</DialogTitle>
             <DialogDescription className="text-[10px]">
-              Tanggapan Anda akan muncul di aplikasi.
+              Tanggapan akan muncul publik.
             </DialogDescription>
           </DialogHeader>
           <div className="bg-zinc-900 p-3 rounded-xl border border-zinc-800 mb-3">
             <p className="text-xs text-zinc-400 italic line-clamp-3">
-              "{activeReplyReview?.comment}"
+              "{activeData.find((r) => r.id === replyId)?.comment}"
             </p>
           </div>
           <textarea
@@ -653,7 +683,7 @@ export default function AdminReviewsPage() {
               Hapus Permanen?
             </DialogTitle>
             <DialogDescription className="text-center text-[10px] text-zinc-500">
-              Data ulasan akan hilang dan tidak dapat dikembalikan.
+              Data ulasan akan hilang.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="flex gap-2 w-full">
@@ -676,6 +706,28 @@ export default function AdminReviewsPage() {
               )}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* LIGHTBOX */}
+      <Dialog open={!!previewImage} onOpenChange={() => setPreviewImage(null)}>
+        <DialogContent className="bg-black/90 border-0 text-white max-w-xl p-0 overflow-hidden flex flex-col justify-center items-center h-auto min-h-[300px]">
+          <div className="relative w-full aspect-square md:aspect-video">
+            {previewImage && (
+              <Image
+                src={previewImage}
+                alt="Preview"
+                fill
+                className="object-contain"
+              />
+            )}
+          </div>
+          <button
+            onClick={() => setPreviewImage(null)}
+            className="absolute top-4 right-4 bg-black/50 p-2 rounded-full text-white hover:bg-black/80"
+          >
+            <X size={20} />
+          </button>
         </DialogContent>
       </Dialog>
     </div>

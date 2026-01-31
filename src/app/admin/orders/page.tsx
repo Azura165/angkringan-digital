@@ -12,28 +12,22 @@ import {
   Utensils,
   MapPin,
   Calendar,
-  Volume2,
-  VolumeX,
-  Power,
-  Eye,
   Wallet,
   QrCode,
-  Download,
   ListChecks,
-  AlertTriangle,
   Wifi,
   WifiOff,
   Smartphone,
   User,
   ChevronDown,
   Loader2,
-  XCircle,
-  FileWarning,
   RefreshCw,
   Trash2,
-  Copy,
+  Eye,
   Zap,
-  Info,
+  Volume2,
+  VolumeX,
+  Play,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -70,8 +64,10 @@ interface Order {
   items?: OrderItem[];
 }
 
-const ITEMS_PER_PAGE = 20;
+const ITEMS_PER_PAGE = 50;
+const CACHE_KEY = "admin_orders_cache_v1"; // Kunci penyimpanan cache
 
+// --- HELPERS ---
 const formatRupiah = (num: number) =>
   new Intl.NumberFormat("id-ID", {
     style: "currency",
@@ -80,13 +76,20 @@ const formatRupiah = (num: number) =>
   }).format(num);
 
 const getTimeAgo = (dateStr: string) => {
-  const diff = Math.floor(
-    (new Date().getTime() - new Date(dateStr).getTime()) / 60000,
-  );
-  return diff;
+  const now = new Date();
+  const created = new Date(dateStr);
+  const diffMs = now.getTime() - created.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffMins < 1) return "Baru saja";
+  if (diffMins < 60) return `${diffMins} mnt`;
+  if (diffHours < 24) return `${diffHours} jam`;
+  return `${diffDays} hari`;
 };
 
-// --- COMPONENT: ORDER CARD ---
+// --- SUB-COMPONENT: ORDER CARD (MEMOIZED) ---
 const OrderCard = memo(
   ({
     order,
@@ -104,9 +107,9 @@ const OrderCard = memo(
     const statusConfig = {
       pending: {
         color: "border-yellow-500/50 bg-yellow-500/5",
-        badge: "warning",
+        badge: "destructive",
       },
-      cooking: { color: "border-blue-500/50 bg-blue-500/5", badge: "info" },
+      cooking: { color: "border-blue-500/50 bg-blue-500/5", badge: "default" },
       ready: { color: "border-green-500/50 bg-green-500/5", badge: "success" },
       completed: {
         color: "border-zinc-800 bg-zinc-900 opacity-60",
@@ -118,55 +121,58 @@ const OrderCard = memo(
       },
     }[order.status] || { color: "border-zinc-800", badge: "secondary" };
 
-    const minutesAgo = getTimeAgo(order.created_at);
+    const timeString = getTimeAgo(order.created_at);
     const isLate =
-      ["pending", "cooking"].includes(order.status) && minutesAgo > 15;
-    const progressPercent = Math.min((minutesAgo / 45) * 100, 100);
-    const progressColor =
-      minutesAgo < 15
-        ? "bg-green-500"
-        : minutesAgo < 30
-          ? "bg-yellow-500"
-          : "bg-red-500";
+      (order.status === "pending" &&
+        (timeString.includes("jam") || parseInt(timeString) > 15)) ||
+      (order.status === "cooking" &&
+        (timeString.includes("jam") || parseInt(timeString) > 30));
 
-    const handleCopyID = (e: React.MouseEvent) => {
-      e.stopPropagation();
-      navigator.clipboard.writeText(order.order_code || `#${order.id}`);
-      toast.success("ID Order Disalin", { duration: 1500 });
-      if (navigator.vibrate) navigator.vibrate(50);
-    };
+    const handleCopyID = useCallback(
+      (e: React.MouseEvent) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(order.order_code || `#${order.id}`);
+        toast.success("Kode disalin!");
+      },
+      [order.order_code, order.id],
+    );
+
+    const handleAction = useCallback(
+      (e: React.MouseEvent, status: string, pay?: boolean) => {
+        e.stopPropagation();
+        onUpdateStatus(order.id, status, pay);
+      },
+      [order.id, onUpdateStatus],
+    );
 
     return (
       <div
         onClick={() => onDetail(order)}
-        className={`relative rounded-2xl border cursor-pointer transition-all duration-300 hover:scale-[1.01] active:scale-[0.98] flex flex-col justify-between h-full group overflow-hidden ${statusConfig.color} ${kitchenMode ? "p-5" : "p-4"}`}
+        className={`relative rounded-2xl border cursor-pointer transition-all duration-200 hover:border-zinc-600 active:scale-[0.99] flex flex-col justify-between h-full group overflow-hidden ${statusConfig.color} ${kitchenMode ? "p-5" : "p-4"}`}
       >
         {["pending", "cooking", "ready"].includes(order.status) && (
-          <div className="absolute bottom-0 left-0 h-1 w-full bg-zinc-800/50">
-            <div
-              className={`h-full ${progressColor} transition-all duration-1000 ease-out`}
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
+          <div
+            className={`absolute left-0 top-0 bottom-0 w-1 ${order.status === "ready" ? "bg-green-500" : order.status === "cooking" ? "bg-blue-500" : "bg-yellow-500"}`}
+          />
         )}
-        <div className="flex justify-between items-start mb-3">
-          <div className="flex flex-col">
+
+        <div className="flex justify-between items-start mb-3 pl-2">
+          <div className="flex flex-col min-w-0">
             <div
               onClick={handleCopyID}
-              className="flex items-center gap-1.5 mb-0.5 cursor-copy active:opacity-50"
+              className="flex items-center gap-1.5 mb-0.5 cursor-copy hover:opacity-70 w-fit"
             >
-              <span className="text-[10px] font-mono font-bold tracking-wider text-orange-500 bg-orange-500/10 px-1.5 rounded flex items-center gap-1">
-                {order.order_code || `#${order.id}`}{" "}
-                <Copy size={8} className="opacity-50" />
+              <span className="text-[10px] font-mono font-bold tracking-wider text-zinc-500 bg-zinc-900 px-1.5 rounded border border-zinc-800">
+                {order.order_code || `#${order.id}`}
               </span>
               {order.table_number === "Takeaway" ? (
-                <Smartphone size={10} className="text-zinc-500" />
+                <Smartphone size={10} className="text-zinc-600" />
               ) : (
-                <User size={10} className="text-zinc-500" />
+                <User size={10} className="text-zinc-600" />
               )}
             </div>
             <h3
-              className={`font-bold text-white leading-tight line-clamp-1 ${kitchenMode ? "text-xl" : "text-lg"}`}
+              className={`font-bold text-white leading-tight truncate ${kitchenMode ? "text-xl" : "text-lg"}`}
             >
               {order.customer_name}
             </h3>
@@ -174,25 +180,29 @@ const OrderCard = memo(
               <span
                 className={`flex items-center gap-1 ${isLate ? "text-red-500 font-bold animate-pulse" : ""}`}
               >
-                <Clock size={12} /> {minutesAgo} mnt
+                <Clock size={12} /> {timeString}
               </span>
               <span className="w-px h-3 bg-zinc-700" />
               <span
                 className={`${order.table_number === "Takeaway" ? "text-orange-400" : "text-zinc-300"} font-bold flex items-center gap-1`}
               >
-                <MapPin size={12} /> {order.table_number}
+                <MapPin size={12} />{" "}
+                {order.table_number === "Takeaway"
+                  ? "Bungkus"
+                  : `Meja ${order.table_number}`}
               </span>
             </div>
           </div>
           <Badge
             variant={order.status === "pending" ? "destructive" : "secondary"}
-            className="uppercase text-[10px]"
+            className="uppercase text-[10px] shrink-0"
           >
             {order.status}
           </Badge>
         </div>
+
         <div
-          className={`flex-1 space-y-2 mb-4 border-t border-dashed border-white/10 pt-3 ${kitchenMode ? "text-sm" : "text-xs"}`}
+          className={`flex-1 space-y-2 mb-4 border-t border-dashed border-white/10 pt-3 pl-2 ${kitchenMode ? "text-sm" : "text-xs"}`}
         >
           {order.items?.slice(0, kitchenMode ? 8 : 3).map((item, i) => (
             <div key={i} className="flex flex-col">
@@ -207,28 +217,27 @@ const OrderCard = memo(
                 </span>
               </div>
               {item.note && (
-                <div className="ml-6 text-[10px] text-zinc-500 italic flex items-center gap-1">
-                  <span className="bg-zinc-950/50 px-1.5 rounded border border-white/5">
-                    📝 {item.note}
-                  </span>
+                <div className="ml-6 text-[10px] text-yellow-500/80 italic">
+                  📝 {item.note}
                 </div>
               )}
             </div>
           ))}
           {(order.items?.length || 0) > (kitchenMode ? 8 : 3) && (
-            <p className="text-[10px] text-zinc-500 italic">
+            <p className="text-[10px] text-zinc-500 italic pl-6">
               + {(order.items?.length || 0) - (kitchenMode ? 8 : 3)} lainnya...
             </p>
           )}
         </div>
-        <div className="mt-auto relative z-10 pb-1">
+
+        <div className="mt-auto relative z-10 pl-2">
           {!kitchenMode && (
-            <div className="flex justify-between items-center mb-3">
-              <p className="font-black text-white text-base">
+            <div className="flex justify-between items-center mb-3 bg-black/20 p-2 rounded-lg">
+              <p className="font-black text-white text-sm">
                 {formatRupiah(order.total_price)}
               </p>
               <div
-                className={`text-[10px] px-2 py-0.5 rounded font-bold flex items-center gap-1 ${order.payment_status === "paid" ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}
+                className={`text-[9px] px-2 py-0.5 rounded font-bold flex items-center gap-1 ${order.payment_status === "paid" ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}
               >
                 {order.payment_method === "qris" ? (
                   <QrCode size={10} />
@@ -243,12 +252,9 @@ const OrderCard = memo(
             {order.status === "pending" && (
               <Button
                 disabled={isProcessing}
-                size={kitchenMode ? "lg" : "sm"}
-                className="w-full bg-blue-600 hover:bg-blue-500 font-bold shadow-lg shadow-blue-900/20"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onUpdateStatus(order.id, "cooking");
-                }}
+                size="sm"
+                className="w-full bg-blue-600 hover:bg-blue-500 font-bold shadow-lg"
+                onClick={(e) => handleAction(e, "cooking")}
               >
                 <ChefHat size={16} className="mr-2" /> Masak
               </Button>
@@ -256,12 +262,9 @@ const OrderCard = memo(
             {order.status === "cooking" && (
               <Button
                 disabled={isProcessing}
-                size={kitchenMode ? "lg" : "sm"}
-                className="w-full bg-orange-600 hover:bg-orange-500 font-bold shadow-lg shadow-orange-900/20"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onUpdateStatus(order.id, "ready");
-                }}
+                size="sm"
+                className="w-full bg-orange-600 hover:bg-orange-500 font-bold shadow-lg"
+                onClick={(e) => handleAction(e, "ready")}
               >
                 <CheckCircle2 size={16} className="mr-2" /> Siap
               </Button>
@@ -269,12 +272,9 @@ const OrderCard = memo(
             {order.status === "ready" && (
               <Button
                 disabled={isProcessing}
-                size={kitchenMode ? "lg" : "sm"}
-                className="w-full bg-green-600 hover:bg-green-500 font-bold shadow-lg shadow-green-900/20"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onUpdateStatus(order.id, "completed", true);
-                }}
+                size="sm"
+                className="w-full bg-green-600 hover:bg-green-500 font-bold shadow-lg"
+                onClick={(e) => handleAction(e, "completed", true)}
               >
                 <DollarSign size={16} className="mr-2" /> Selesai
               </Button>
@@ -287,90 +287,326 @@ const OrderCard = memo(
 );
 OrderCard.displayName = "OrderCard";
 
+// --- MODALS (ISOLATED) ---
+const OrderDetailModal = memo(
+  ({ isOpen, onClose, order, onUpdate, onDelete, isProcessing }: any) => {
+    if (!order) return null;
+    const handlePrint = () => window.print();
+    return (
+      <Dialog open={isOpen} onOpenChange={onClose}>
+        <DialogContent className="bg-zinc-950 border-zinc-800 text-white max-w-md max-h-[90vh] overflow-y-auto print:bg-white print:text-black shadow-2xl">
+          <DialogHeader className="border-b border-dashed border-zinc-800 pb-4">
+            <DialogTitle className="flex justify-between items-center text-xl">
+              <span className="font-mono text-zinc-300">
+                {order.order_code || `#${order.id}`}
+              </span>
+              <Badge
+                variant="outline"
+                className="border-orange-500 text-orange-500"
+              >
+                {order.status}
+              </Badge>
+            </DialogTitle>
+            <DialogDescription className="text-zinc-400 flex items-center gap-2 text-xs">
+              <Calendar size={12} />{" "}
+              {new Date(order.created_at).toLocaleString("id-ID")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2" id="printable-area">
+            <div className="flex justify-between items-center bg-zinc-900/50 p-4 rounded-xl print:bg-transparent print:p-0">
+              <div>
+                <p className="font-bold text-lg text-white print:text-black">
+                  {order.customer_name}
+                </p>
+                <div className="flex items-center gap-1 text-zinc-400 text-xs print:text-gray-600 mt-1">
+                  <MapPin size={12} />{" "}
+                  {order.table_number === "Takeaway"
+                    ? "Bungkus"
+                    : `Meja ${order.table_number}`}
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] text-zinc-500">Metode</p>
+                <div className="flex items-center gap-1 justify-end font-bold text-sm">
+                  {order.payment_method === "qris" ? (
+                    <QrCode size={14} />
+                  ) : (
+                    <Wallet size={14} />
+                  )}{" "}
+                  <span className="uppercase">{order.payment_method}</span>
+                </div>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {order.items?.map((item: any, idx: number) => (
+                <div
+                  key={idx}
+                  className="flex justify-between text-sm items-start border-b border-zinc-900 pb-2 last:border-0"
+                >
+                  <div className="flex gap-3">
+                    <span className="font-bold text-orange-500 min-w-[24px]">
+                      x{item.qty}
+                    </span>
+                    <div>
+                      <span className="text-zinc-200 print:text-black font-medium">
+                        {item.menu_name}
+                      </span>
+                      {item.note && (
+                        <div className="text-[10px] text-zinc-500 italic">
+                          📝 {item.note}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <span className="text-zinc-400 print:text-black">
+                    {formatRupiah(item.price * item.qty)}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="bg-orange-500/10 border border-orange-500/20 p-4 rounded-xl flex justify-between items-center print:border-black print:bg-transparent">
+              <span className="font-bold text-orange-200 print:text-black">
+                TOTAL
+              </span>
+              <span className="font-black text-2xl text-orange-500 print:text-black">
+                {formatRupiah(order.total_price)}
+              </span>
+            </div>
+          </div>
+          <DialogFooter className="flex-col gap-2 sm:flex-col print:hidden pt-2">
+            {order.status === "pending" && (
+              <Button
+                disabled={isProcessing}
+                onClick={() => onUpdate(order.id, "cooking")}
+                className="w-full bg-blue-600 hover:bg-blue-700 font-bold h-12 text-lg"
+              >
+                <ChefHat size={20} className="mr-2" /> Terima & Masak
+              </Button>
+            )}
+            {order.status === "cooking" && (
+              <Button
+                disabled={isProcessing}
+                onClick={() => onUpdate(order.id, "ready")}
+                className="w-full bg-orange-600 hover:bg-orange-700 font-bold h-12 text-lg"
+              >
+                <CheckCircle2 size={20} className="mr-2" /> Pesanan Siap!
+              </Button>
+            )}
+            {order.status === "ready" && (
+              <Button
+                disabled={isProcessing}
+                onClick={() => onUpdate(order.id, "completed", true)}
+                className="w-full bg-green-600 hover:bg-green-700 font-bold h-12 text-lg"
+              >
+                <DollarSign size={20} className="mr-2" /> Selesai & Bayar
+              </Button>
+            )}
+            <div className="flex gap-2 w-full mt-2">
+              {order.status === "completed" && (
+                <Button
+                  variant="outline"
+                  onClick={handlePrint}
+                  className="flex-1 border-zinc-700 hover:bg-zinc-800"
+                >
+                  <Printer size={16} className="mr-2" /> Cetak Struk
+                </Button>
+              )}
+              <Button
+                variant="destructive"
+                onClick={onDelete}
+                className="flex-1 bg-red-900/30 text-red-400 hover:bg-red-900 border border-red-900"
+              >
+                <Trash2 size={16} className="mr-2" /> Hapus
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  },
+);
+OrderDetailModal.displayName = "OrderDetailModal";
+
+const KitchenSummaryModal = memo(({ isOpen, onClose, orders }: any) => {
+  const summary = useMemo(() => {
+    const activeItems = orders
+      .filter((o: Order) => ["pending", "cooking"].includes(o.status))
+      .flatMap((o: Order) => o.items || []);
+    const counts: Record<string, number> = {};
+    activeItems.forEach((item: OrderItem) => {
+      counts[item.menu_name] = (counts[item.menu_name] || 0) + item.qty;
+    });
+    return Object.entries(counts).sort(([, a], [, b]) => b - a);
+  }, [orders]);
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="bg-zinc-950 border-zinc-800 text-white max-w-sm rounded-2xl shadow-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ListChecks size={20} className="text-orange-500" /> Rekap Dapur
+          </DialogTitle>
+          <DialogDescription className="text-xs text-zinc-400">
+            Total item yang HARUS dimasak sekarang.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2 py-2 max-h-[60vh] overflow-y-auto">
+          {summary.length > 0 ? (
+            summary.map(([name, qty], idx) => (
+              <div
+                key={idx}
+                className="flex justify-between items-center bg-zinc-900/50 p-3 rounded-lg border border-zinc-800"
+              >
+                <span className="font-medium text-sm text-zinc-200">
+                  {name}
+                </span>
+                <Badge className="bg-orange-600 hover:bg-orange-700 text-white text-sm px-3 py-1">
+                  {qty}
+                </Badge>
+              </div>
+            ))
+          ) : (
+            <p className="text-center text-zinc-500 text-xs py-4 border border-dashed border-zinc-800 rounded-lg">
+              Dapur aman terkendali. 😴
+            </p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button
+            onClick={onClose}
+            className="w-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700"
+          >
+            Tutup
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+});
+KitchenSummaryModal.displayName = "KitchenSummaryModal";
+
 // --- MAIN PAGE ---
 export default function AdminOrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isConnected, setIsConnected] = useState(true);
+  const [isConnected, setIsConnected] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
 
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-
   const [activeTab, setActiveTab] = useState("active");
   const [statusFilter, setStatusFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  const [isMuted, setIsMuted] = useState(false);
   const [kitchenMode, setKitchenMode] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
-  // SOLUSI: Simpan isMuted di Ref agar tidak mentrigger re-subscription
-  const isMutedRef = useRef(isMuted);
-
+  // 1. INIT: Cache & Config
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const savedMute = localStorage.getItem("admin_mute");
       const savedKitchen = localStorage.getItem("admin_kitchen");
-      if (savedMute) {
-        const muted = JSON.parse(savedMute);
-        setIsMuted(muted);
-        isMutedRef.current = muted;
-      }
+      const savedMute = localStorage.getItem("admin_mute");
       if (savedKitchen) setKitchenMode(JSON.parse(savedKitchen));
-      audioRef.current = new Audio("/sounds/notification.mp3");
+      if (savedMute) setIsMuted(JSON.parse(savedMute));
 
       if ("wakeLock" in navigator) {
         // @ts-ignore
-        navigator.wakeLock
-          .request("screen")
-          .catch((e) => console.log("Wake Lock Error:", e));
+        navigator.wakeLock.request("screen").catch(() => {});
+      }
+
+      // --- LOGIC RESET BADGE ---
+      // Saat halaman ini dibuka, update timestamp "Terakhir Dibaca"
+      localStorage.setItem("admin_last_read_orders", new Date().toISOString());
+
+      // --- LOGIC CACHE (ANTI-LOADING) ---
+      // Coba load dari memory dulu biar instan
+      const cached = sessionStorage.getItem(CACHE_KEY);
+      if (cached) {
+        try {
+          setOrders(JSON.parse(cached));
+          setIsLoading(false); // Langsung tampilkan konten!
+        } catch (e) {}
       }
     }
+
+    // Fetch data terbaru di background (Silent Update)
+    fetchOrders(true);
+
+    const channel = supabase
+      .channel("admin-orders-page-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "orders" },
+        async (payload) => {
+          if (payload.eventType === "INSERT") {
+            const { data } = await supabase
+              .from("orders")
+              .select(`*, order_items(*)`)
+              .eq("id", payload.new.id)
+              .single();
+            if (data)
+              setOrders((prev) => [
+                { ...data, items: data.order_items },
+                ...prev,
+              ]);
+          } else if (payload.eventType === "UPDATE") {
+            setOrders((prev) =>
+              prev.map((o) =>
+                o.id === payload.new.id ? { ...o, ...payload.new } : o,
+              ),
+            );
+          }
+        },
+      )
+      .subscribe((status) => setIsConnected(status === "SUBSCRIBED"));
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
-  // Update Ref saat state berubah
+  // Update Cache saat data berubah
   useEffect(() => {
-    isMutedRef.current = isMuted;
-  }, [isMuted]);
+    if (orders.length > 0) {
+      sessionStorage.setItem(CACHE_KEY, JSON.stringify(orders));
+    }
+  }, [orders]);
 
+  const toggleKitchen = () =>
+    setKitchenMode((prev) => {
+      localStorage.setItem("admin_kitchen", JSON.stringify(!prev));
+      return !prev;
+    });
   const toggleMute = () => {
-    const newMuted = !isMuted;
-    setIsMuted(newMuted);
-    localStorage.setItem("admin_mute", JSON.stringify(newMuted));
-
-    if (!newMuted && audioRef.current) {
-      audioRef.current.volume = 0;
-      audioRef.current
-        .play()
-        .then(() => {
-          audioRef.current!.volume = 1;
-          toast.success("Suara Diaktifkan 🔊");
-        })
-        .catch(() => toast.error("Klik lagi untuk aktifkan suara"));
-    } else {
-      toast("Suara Dimatikan 🔇");
+    const newVal = !isMuted;
+    setIsMuted(newVal);
+    localStorage.setItem("admin_mute", JSON.stringify(newVal));
+    if (!newVal) {
+      const a = new Audio("/sounds/notification.mp3");
+      a.play().catch(() => {});
+      toast("🔊 Test Suara");
     }
   };
-
-  const toggleKitchen = () => {
-    setKitchenMode(!kitchenMode);
-    localStorage.setItem("admin_kitchen", JSON.stringify(!kitchenMode));
+  const testSound = () => {
+    const a = new Audio("/sounds/notification.mp3");
+    a.play().catch(() => toast.error("Klik interaksi dulu!"));
+    toast("🔊 Test Suara Berjalan");
   };
 
+  // 2. FETCH DATA (Optimized)
   const fetchOrders = useCallback(
     async (reset = false) => {
       if (reset) {
-        setIsLoading(true);
         setPage(0);
         setHasMore(true);
+        // Jangan set isLoading(true) jika data sudah ada dari cache (biar gak kedip)
+        setOrders((prev) => {
+          if (prev.length === 0) setIsLoading(true);
+          return prev;
+        });
       } else {
         setLoadingMore(true);
       }
@@ -390,20 +626,17 @@ export default function AdminOrdersPage() {
             ...o,
             items: o.order_items,
           }));
-          if (reset) setOrders(formatted);
-          else
-            setOrders((prev) => {
-              const existingIds = new Set(prev.map((o) => o.id));
-              return [
-                ...prev,
-                ...formatted.filter((o) => !existingIds.has(o.id)),
-              ];
-            });
+          setOrders((prev) => {
+            if (reset) return formatted;
+            const existingIds = new Set(prev.map((o) => o.id));
+            return [
+              ...prev,
+              ...formatted.filter((o) => !existingIds.has(o.id)),
+            ];
+          });
           if (data.length < ITEMS_PER_PAGE) setHasMore(false);
-          setIsConnected(true);
         }
       } catch (err) {
-        setIsConnected(false);
         toast.error("Gagal sync data.");
       } finally {
         setIsLoading(false);
@@ -417,97 +650,60 @@ export default function AdminOrdersPage() {
   const handleManualRefresh = () => {
     setIsRefreshing(true);
     fetchOrders(true);
-    if (navigator.vibrate) navigator.vibrate(50);
-    toast("Data diperbarui", {
-      icon: <RefreshCw className="animate-spin h-4 w-4" />,
-      duration: 2000,
-    }); // 2 Detik
   };
 
-  // --- REALTIME LISTENER (FIXED: Dependency removed) ---
-  useEffect(() => {
-    fetchOrders(true);
-    const channel = supabase
-      .channel("admin-orders-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "orders" },
-        async (payload) => {
-          if (payload.eventType === "INSERT") {
-            // Gunakan REF, bukan state langsung, agar useEffect tidak restart
-            if (!isMutedRef.current && audioRef.current)
-              audioRef.current.play().catch(() => {});
-            if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-            toast("Order Masuk!", {
-              description: `Meja ${payload.new.table_number}`,
-              icon: "🔔",
-              style: { background: "#10B981", color: "white" },
-            });
-            const { data } = await supabase
-              .from("orders")
-              .select(`*, order_items(*)`)
-              .eq("id", payload.new.id)
-              .single();
-            if (data)
-              setOrders((prev) => [
-                { ...data, items: data.order_items },
-                ...prev,
-              ]);
-          } else if (payload.eventType === "UPDATE") {
-            setOrders((prev) =>
-              prev.map((o) =>
-                o.id === payload.new.id ? { ...o, ...payload.new } : o,
-              ),
-            );
-            if (payload.new.status === "cancelled")
-              toast(`Order #${payload.new.id} Dibatalkan`, { icon: "🚫" });
-          }
-        },
-      )
-      .subscribe((status) => setIsConnected(status === "SUBSCRIBED"));
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []); // DEPENDENCY KOSONG = KONEKSI STABIL
-
-  const handleUpdateStatus = async (
-    id: number,
-    newStatus: string,
-    isPayment = false,
-  ) => {
-    setIsProcessing(true);
-    const originalOrders = [...orders];
-    setOrders((prev) =>
-      prev.map((o) =>
-        o.id === id
-          ? {
-              ...o,
-              status: newStatus as any,
-              payment_status: isPayment ? "paid" : o.payment_status,
-            }
-          : o,
-      ),
-    );
-    if (["completed", "cancelled"].includes(newStatus)) setIsDetailOpen(false);
-    const updatePayload: any = { status: newStatus };
-    if (isPayment) updatePayload.payment_status = "paid";
-    const { error } = await supabase
-      .from("orders")
-      .update(updatePayload)
-      .eq("id", id);
-    if (error) {
-      setOrders(originalOrders);
-      toast.error("Gagal update status.");
-    } else {
+  // 4. HANDLERS
+  const handleDetail = useCallback((order: Order) => {
+    setSelectedOrder(order);
+    setIsDetailOpen(true);
+  }, []);
+  const handleUpdateStatus = useCallback(
+    async (id: number, newStatus: string, isPayment = false) => {
+      setIsProcessing(true);
+      setOrders((prev) =>
+        prev.map((o) =>
+          o.id === id
+            ? {
+                ...o,
+                status: newStatus as any,
+                payment_status: isPayment ? "paid" : o.payment_status,
+              }
+            : o,
+        ),
+      );
+      if (["completed", "cancelled"].includes(newStatus))
+        setIsDetailOpen(false);
+      await supabase
+        .from("orders")
+        .update(
+          isPayment
+            ? { status: newStatus, payment_status: "paid" }
+            : { status: newStatus },
+        )
+        .eq("id", id);
       toast.success(`Status: ${newStatus.toUpperCase()}`);
-      if (navigator.vibrate) navigator.vibrate(50);
+      setIsProcessing(false);
+    },
+    [],
+  );
+  const handleDeleteOrder = useCallback(async () => {
+    if (!selectedOrder) return;
+    if (confirm("Hapus pesanan ini?")) {
+      setIsProcessing(true);
+      const { error } = await supabase
+        .from("orders")
+        .delete()
+        .eq("id", selectedOrder.id);
+      if (!error) {
+        setOrders((prev) => prev.filter((o) => o.id !== selectedOrder!.id));
+        setIsDetailOpen(false);
+        toast.success("Dihapus");
+      }
+      setIsProcessing(false);
     }
-    setIsProcessing(false);
-  };
+  }, [selectedOrder]);
 
-  const handlePrint = () => window.print();
-
+  // 5. FILTERING
   const filteredOrders = useMemo(() => {
     let data = orders;
     if (activeTab === "active")
@@ -518,41 +714,16 @@ export default function AdminOrdersPage() {
       data = data.filter((o) => ["completed"].includes(o.status));
     else if (activeTab === "cancelled")
       data = data.filter((o) => ["cancelled"].includes(o.status));
-
     if (activeTab === "active" && statusFilter !== "all")
       data = data.filter((o) => o.status === statusFilter);
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
+    if (searchQuery)
       data = data.filter(
         (o) =>
-          o.customer_name.toLowerCase().includes(q) ||
-          o.table_number.toLowerCase().includes(q) ||
-          (o.order_code && o.order_code.toLowerCase().includes(q)),
+          o.customer_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          o.order_code?.toLowerCase().includes(searchQuery.toLowerCase()),
       );
-    }
-    if (activeTab === "active") {
-      data.sort((a, b) => {
-        const priority: Record<string, number> = {
-          pending: 0,
-          cooking: 1,
-          ready: 2,
-        };
-        return (priority[a.status] || 0) - (priority[b.status] || 0);
-      });
-    }
     return data;
   }, [orders, activeTab, searchQuery, statusFilter]);
-
-  const kitchenSummary = useMemo(() => {
-    const activeItems = orders
-      .filter((o) => ["pending", "cooking"].includes(o.status))
-      .flatMap((o) => o.items || []);
-    const summary: Record<string, number> = {};
-    activeItems.forEach((item) => {
-      summary[item.menu_name] = (summary[item.menu_name] || 0) + item.qty;
-    });
-    return Object.entries(summary).sort(([, a], [, b]) => b - a);
-  }, [orders]);
 
   const stats = useMemo(() => {
     const today = new Date().toISOString().split("T")[0];
@@ -566,10 +737,7 @@ export default function AdminOrdersPage() {
   }, [orders]);
 
   return (
-    <div
-      className="space-y-6 pb-24 animate-in fade-in slide-in-from-bottom-2 duration-500"
-      ref={containerRef}
-    >
+    <div className="space-y-6 pb-24 animate-in fade-in slide-in-from-bottom-2 duration-300">
       <div className="sticky top-0 z-30 bg-zinc-950/90 backdrop-blur-xl border-b border-white/5 pb-4 pt-2 -mx-4 px-4 md:mx-0 md:px-0 md:pt-0">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
           <div>
@@ -603,22 +771,31 @@ export default function AdminOrdersPage() {
               size="sm"
               variant="outline"
               onClick={() => setShowSummary(true)}
-              className="border-zinc-800 text-zinc-300 relative"
-              title="Rekap Dapur"
+              className="border-zinc-800 text-zinc-300"
             >
               <ListChecks size={16} className="mr-2" /> Dapur
-              {kitchenSummary.length > 0 && (
-                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
-              )}
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={toggleMute}
-              className={`border-zinc-800 ${isMuted ? "text-red-500" : "text-green-500"}`}
-            >
-              {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-            </Button>
+            <div className="flex items-center bg-zinc-900 rounded-lg border border-zinc-800 p-0.5">
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={testSound}
+                className="h-8 w-8 text-zinc-400 hover:text-white"
+                title="Tes Suara"
+              >
+                <Play size={10} />
+              </Button>
+              <div className="w-px h-4 bg-zinc-800 mx-0.5"></div>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={toggleMute}
+                className={`h-8 w-8 ${isMuted ? "text-red-500" : "text-green-500"}`}
+                title={isMuted ? "Unmute" : "Mute"}
+              >
+                {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+              </Button>
+            </div>
             <Button
               size="sm"
               variant="outline"
@@ -626,7 +803,7 @@ export default function AdminOrdersPage() {
               className={`border-zinc-800 ${kitchenMode ? "bg-orange-500/20 text-orange-500 border-orange-500" : "text-zinc-400"}`}
             >
               <Eye size={16} className="mr-2" />{" "}
-              {kitchenMode ? "Normal" : "Dapur"}
+              {kitchenMode ? "Normal" : "Fokus"}
             </Button>
           </div>
         </div>
@@ -634,19 +811,10 @@ export default function AdminOrdersPage() {
           <div className="flex flex-col sm:flex-row gap-3 justify-between">
             <div className="bg-zinc-900 p-1 rounded-xl flex gap-1 w-full sm:w-auto overflow-x-auto">
               <button
-                onClick={() => {
-                  setActiveTab("active");
-                  setStatusFilter("all");
-                }}
+                onClick={() => setActiveTab("active")}
                 className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${activeTab === "active" ? "bg-gradient-to-r from-orange-600 to-orange-500 text-white shadow-lg" : "text-zinc-400 hover:text-white"}`}
               >
-                🔥 Aktif (
-                {
-                  orders.filter((o) =>
-                    ["pending", "cooking", "ready"].includes(o.status),
-                  ).length
-                }
-                )
+                🔥 Aktif
               </button>
               <button
                 onClick={() => setActiveTab("history")}
@@ -721,12 +889,7 @@ export default function AdminOrdersPage() {
               <OrderCard
                 key={order.id}
                 order={order}
-                onDetail={() => {
-                  requestAnimationFrame(() => {
-                    setSelectedOrder(order);
-                    setIsDetailOpen(true);
-                  });
-                }}
+                onDetail={handleDetail}
                 onUpdateStatus={handleUpdateStatus}
                 kitchenMode={kitchenMode}
                 isProcessing={isProcessing}
@@ -742,8 +905,6 @@ export default function AdminOrdersPage() {
           <p className="text-sm font-medium">Tidak ada pesanan.</p>
         </div>
       )}
-
-      {/* PAGINATION: LOAD MORE (Mobile Friendly) */}
       {hasMore && !searchQuery && filteredOrders.length >= ITEMS_PER_PAGE && (
         <div className="flex justify-center pt-6">
           <Button
@@ -762,199 +923,19 @@ export default function AdminOrdersPage() {
         </div>
       )}
 
-      {/* --- DETAIL MODAL --- */}
-      <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
-        <DialogContent className="bg-zinc-950 border-zinc-800 text-white max-w-md max-h-[90vh] overflow-y-auto print:bg-white print:text-black shadow-2xl shadow-black/90">
-          <DialogHeader className="border-b border-dashed border-zinc-800 pb-4">
-            <DialogTitle className="flex justify-between items-center text-xl">
-              <span className="font-mono">
-                {selectedOrder?.order_code || `#${selectedOrder?.id}`}
-              </span>
-              <Badge
-                variant="outline"
-                className="border-orange-500 text-orange-500"
-              >
-                {selectedOrder?.status}
-              </Badge>
-            </DialogTitle>
-            <DialogDescription className="text-zinc-400 flex items-center gap-2 text-xs">
-              <Calendar size={12} />{" "}
-              {selectedOrder &&
-                new Date(selectedOrder.created_at).toLocaleString("id-ID")}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2" id="printable-area">
-            <div className="flex justify-between items-center bg-zinc-900/50 p-4 rounded-xl print:bg-transparent print:p-0">
-              <div>
-                <p className="font-bold text-lg text-white print:text-black">
-                  {selectedOrder?.customer_name}
-                </p>
-                <div className="flex items-center gap-1 text-zinc-400 text-xs print:text-gray-600 mt-1">
-                  <MapPin size={12} />{" "}
-                  {selectedOrder?.table_number === "Takeaway"
-                    ? "Bungkus"
-                    : `Meja ${selectedOrder?.table_number}`}
-                </div>
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] text-zinc-500">Metode</p>
-                <div className="flex items-center gap-1 justify-end font-bold text-sm">
-                  {selectedOrder?.payment_method === "qris" ? (
-                    <QrCode size={14} />
-                  ) : (
-                    <Wallet size={14} />
-                  )}{" "}
-                  <span className="uppercase">
-                    {selectedOrder?.payment_method}
-                  </span>
-                </div>
-              </div>
-            </div>
-            <div className="space-y-3">
-              {selectedOrder?.items?.map((item, idx) => (
-                <div
-                  key={idx}
-                  className="flex justify-between text-sm items-start border-b border-zinc-900 pb-2 last:border-0"
-                >
-                  <div className="flex gap-3">
-                    <span className="font-bold text-orange-500 min-w-[24px]">
-                      x{item.qty}
-                    </span>
-                    <div>
-                      <span className="text-zinc-200 print:text-black font-medium">
-                        {item.menu_name}
-                      </span>
-                      {item.note && (
-                        <div className="text-[10px] text-zinc-500 italic">
-                          📝 {item.note}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <span className="text-zinc-400 print:text-black">
-                    {formatRupiah(item.price * item.qty)}
-                  </span>
-                </div>
-              ))}
-            </div>
-            <div className="bg-orange-500/10 border border-orange-500/20 p-4 rounded-xl flex justify-between items-center print:border-black print:bg-transparent">
-              <span className="font-bold text-orange-200 print:text-black">
-                TOTAL TAGIHAN
-              </span>
-              <span className="font-black text-2xl text-orange-500 print:text-black">
-                {selectedOrder && formatRupiah(selectedOrder.total_price)}
-              </span>
-            </div>
-          </div>
-          <DialogFooter className="flex-col gap-2 sm:flex-col print:hidden pt-2">
-            {selectedOrder?.status !== "completed" &&
-              selectedOrder?.status !== "cancelled" && (
-                <>
-                  {selectedOrder?.status === "pending" && (
-                    <Button
-                      disabled={isProcessing}
-                      onClick={() =>
-                        selectedOrder &&
-                        handleUpdateStatus(selectedOrder.id, "cooking")
-                      }
-                      className="w-full bg-blue-600 hover:bg-blue-700 font-bold h-12 text-lg"
-                    >
-                      <ChefHat size={20} className="mr-2" /> Terima & Masak
-                    </Button>
-                  )}
-                  {selectedOrder?.status === "cooking" && (
-                    <Button
-                      disabled={isProcessing}
-                      onClick={() =>
-                        selectedOrder &&
-                        handleUpdateStatus(selectedOrder.id, "ready")
-                      }
-                      className="w-full bg-orange-600 hover:bg-orange-700 font-bold h-12 text-lg"
-                    >
-                      <CheckCircle2 size={20} className="mr-2" /> Pesanan Siap!
-                    </Button>
-                  )}
-                  {selectedOrder?.status === "ready" && (
-                    <Button
-                      disabled={isProcessing}
-                      onClick={() =>
-                        selectedOrder &&
-                        handleUpdateStatus(selectedOrder.id, "completed", true)
-                      }
-                      className="w-full bg-green-600 hover:bg-green-700 font-bold h-12 text-lg"
-                    >
-                      <DollarSign size={20} className="mr-2" /> Selesai & Bayar
-                    </Button>
-                  )}
-                </>
-              )}
-            <div className="flex gap-2 w-full mt-2">
-              {selectedOrder?.status === "completed" && (
-                <Button
-                  variant="outline"
-                  onClick={handlePrint}
-                  className="flex-1 border-zinc-700 hover:bg-zinc-800"
-                >
-                  <Printer size={16} className="mr-2" /> Cetak Struk
-                </Button>
-              )}
-              <Button
-                variant="destructive"
-                onClick={() =>
-                  selectedOrder &&
-                  handleUpdateStatus(selectedOrder.id, "cancelled")
-                }
-                className="flex-1 bg-red-900/30 text-red-400 hover:bg-red-900 border border-red-900"
-              >
-                Batalkan/Hapus
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* --- KITCHEN SUMMARY MODAL --- */}
-      <Dialog open={showSummary} onOpenChange={setShowSummary}>
-        <DialogContent className="bg-zinc-950 border-zinc-800 text-white max-w-sm rounded-2xl shadow-2xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ListChecks size={20} className="text-orange-500" /> Rekap Dapur
-            </DialogTitle>
-            <DialogDescription className="text-xs text-zinc-400">
-              Total item yang HARUS dimasak sekarang.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 py-2 max-h-[60vh] overflow-y-auto">
-            {kitchenSummary.length > 0 ? (
-              kitchenSummary.map(([name, qty], idx) => (
-                <div
-                  key={idx}
-                  className="flex justify-between items-center bg-zinc-900/50 p-3 rounded-lg border border-zinc-800"
-                >
-                  <span className="font-medium text-sm text-zinc-200">
-                    {name}
-                  </span>
-                  <Badge className="bg-orange-600 hover:bg-orange-700 text-white text-sm px-3 py-1">
-                    {qty}
-                  </Badge>
-                </div>
-              ))
-            ) : (
-              <p className="text-center text-zinc-500 text-xs py-4 border border-dashed border-zinc-800 rounded-lg">
-                Dapur aman terkendali. 😴
-              </p>
-            )}
-          </div>
-          <DialogFooter>
-            <Button
-              onClick={() => setShowSummary(false)}
-              className="w-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700"
-            >
-              Tutup
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <OrderDetailModal
+        isOpen={isDetailOpen}
+        onClose={() => setIsDetailOpen(false)}
+        order={selectedOrder}
+        onUpdate={handleUpdateStatus}
+        onDelete={handleDeleteOrder}
+        isProcessing={isProcessing}
+      />
+      <KitchenSummaryModal
+        isOpen={showSummary}
+        onClose={() => setShowSummary(false)}
+        orders={orders}
+      />
     </div>
   );
 }
