@@ -1,28 +1,50 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-// Halaman yang WAJIB Login
-const protectedRoutes = ["/admin"];
-// Halaman yang HANYA untuk tamu (belum login)
-const authRoutes = ["/auth/login"];
+// Konfigurasi Rute
+const PROTECTED_ROUTES = {
+  ADMIN: "/admin",
+  CASHIER: "/cashier",
+};
+const AUTH_ROUTE = "/auth/login";
 
 export function middleware(request: NextRequest) {
-  // 1. Ambil Cookie 'admin_session'
-  const hasSession = request.cookies.has("admin_session");
   const { pathname } = request.nextUrl;
 
-  // 2. PROTEKSI ADMIN: Jika mau ke /admin TAPI gak punya session -> Tendang ke Login
-  if (protectedRoutes.some((route) => pathname.startsWith(route))) {
+  // 1. Ambil Cookies
+  const hasSession = request.cookies.has("admin_session");
+  const userRole = request.cookies.get("user_role")?.value;
+
+  // 2. LOGIC PROTEKSI HALAMAN (Admin & Cashier)
+  const isAdminRoute = pathname.startsWith(PROTECTED_ROUTES.ADMIN);
+  const isCashierRoute = pathname.startsWith(PROTECTED_ROUTES.CASHIER);
+
+  if (isAdminRoute || isCashierRoute) {
+    // A. Jika belum login -> Tendang ke Login
     if (!hasSession) {
-      const url = new URL("/auth/login", request.url);
+      const url = new URL(AUTH_ROUTE, request.url);
       return NextResponse.redirect(url);
     }
+
+    // B. Role-Based Access Control (RBAC)
+    // Skenario: User 'cashier' mencoba masuk '/admin' -> Redirect ke '/cashier/pos'
+    if (isAdminRoute && userRole === "cashier") {
+      const url = new URL("/cashier/pos", request.url);
+      return NextResponse.redirect(url);
+    }
+
+    // Skenario: User 'super_admin' bebas akses (Boleh masuk cashier juga)
+    // Jadi tidak perlu 'else if' untuk membatasi admin masuk cashier
   }
 
-  // 3. PROTEKSI LOGIN: Jika mau ke Login TAPI SUDAH punya session -> Lempar ke Dashboard
-  if (authRoutes.includes(pathname)) {
+  // 3. PROTEKSI HALAMAN LOGIN (Redirect jika sudah login)
+  if (pathname === AUTH_ROUTE) {
     if (hasSession) {
-      const url = new URL("/admin/dashboard", request.url);
+      // Redirect sesuai role yang tersimpan
+      const targetUrl =
+        userRole === "cashier" ? "/cashier/pos" : "/admin/dashboard";
+
+      const url = new URL(targetUrl, request.url);
       return NextResponse.redirect(url);
     }
   }
@@ -30,7 +52,7 @@ export function middleware(request: NextRequest) {
   return NextResponse.next();
 }
 
-// Konfigurasi path mana saja yang dicek middleware
+// Matcher: Tentukan path mana saja yang dicek middleware
 export const config = {
-  matcher: ["/admin/:path*", "/auth/login"],
+  matcher: ["/admin/:path*", "/cashier/:path*", "/auth/login"],
 };

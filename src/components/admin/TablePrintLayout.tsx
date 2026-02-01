@@ -114,7 +114,7 @@ export default function TablePrintLayout({
               <div className="flex-1 flex items-center justify-center py-2">
                 <div className="bg-white p-2 border-2 border-zinc-100 rounded-xl">
                   <QRCodeSVG
-                    value={`https://angkringan-app.com?table=${table.id}&token=${table.qr_token}`}
+                    value={`https://angkringan-digital.vercel.app?table=${table.id}&token=${table.qr_token}`}
                     /* Ukuran dinamis agar tidak nabrak */
                     size={layoutMode === "landscape" ? 220 : 200}
                     level="H"
