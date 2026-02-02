@@ -64,7 +64,7 @@ const ProductDetailModal = dynamic(
   { ssr: false, loading: () => null },
 );
 
-// --- CSS GLOBAL & OPTIMASI ---
+// --- CSS GLOBAL (Scroll Fix: Removed touch-pan-x) ---
 const GLOBAL_STYLES = `
   @keyframes marquee-linear {
     0% { transform: translate3d(0, 0, 0); }
@@ -83,9 +83,9 @@ const GLOBAL_STYLES = `
       -ms-overflow-style: none;
       scrollbar-width: none;
   }
-  /* Optimasi Scroll Mobile */
-  .touch-pan-x {
-    touch-action: pan-x;
+  /* Memastikan scroll smooth native */
+  html, body {
+    overscroll-behavior-y: none;
   }
 `;
 
@@ -144,8 +144,8 @@ const PROMO_STYLES = [
   "bg-gradient-to-br from-orange-500 via-amber-500 to-yellow-500",
 ];
 
-const CACHE_KEY_STORE = "store_config_cache_v8";
-const CACHE_KEY_HOME_DATA = "home_data_cache_v11";
+const CACHE_KEY_STORE = "store_config_cache_v9";
+const CACHE_KEY_HOME_DATA = "home_data_cache_v12";
 
 // --- HELPER ---
 const formatRupiahCompact = (num: number) => {
@@ -158,7 +158,6 @@ const formatRupiahCompact = (num: number) => {
   }).format(num);
 };
 
-// Helper Load Cache (Safe for SSR)
 const loadCache = <T,>(key: string, fallback: T): T => {
   if (typeof window === "undefined") return fallback;
   try {
@@ -169,7 +168,7 @@ const loadCache = <T,>(key: string, fallback: T): T => {
   }
 };
 
-// --- SUB-COMPONENT: PROMO CARD (OPTIMIZED) ---
+// --- SUB-COMPONENT: PROMO CARD ---
 const PromoCard = memo(({ promo, index }: { promo: Promo; index: number }) => {
   const bgStyle = PROMO_STYLES[index % PROMO_STYLES.length];
 
@@ -185,11 +184,9 @@ const PromoCard = memo(({ promo, index }: { promo: Promo; index: number }) => {
   return (
     <div
       onClick={handleCopy}
-      className={`snap-center min-w-[280px] h-[110px] rounded-2xl relative overflow-hidden shadow-lg cursor-pointer active:scale-[0.98] transition-transform duration-200 group ${bgStyle} transform-gpu`}
+      className={`snap-center min-w-[280px] h-[110px] rounded-2xl relative overflow-hidden shadow-lg cursor-pointer active:scale-[0.98] transition-transform duration-200 group ${bgStyle}`}
     >
-      {/* Pattern Overlay - Static Image is lighter than CSS Gradient calculations */}
       <div className="absolute inset-0 opacity-20 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] mix-blend-overlay pointer-events-none" />
-
       <div className="relative z-10 h-full flex flex-col justify-between p-4">
         <div className="flex justify-between items-start">
           <div>
@@ -241,7 +238,7 @@ function HomeContent() {
   const kenyangRef = useRef<HTMLDivElement>(null);
   const cemilanRef = useRef<HTMLDivElement>(null);
 
-  // --- STATE INIT WITH LAZY CACHE ---
+  // --- STATE ---
   const [data, setData] = useState<HomeDataCache>(() =>
     loadCache<HomeDataCache>(CACHE_KEY_HOME_DATA, {
       recommendedItems: [],
@@ -267,7 +264,6 @@ function HomeContent() {
     }),
   );
 
-  // UX State
   const [isInitialLoading, setIsInitialLoading] = useState(() => {
     if (
       typeof window !== "undefined" &&
@@ -297,7 +293,7 @@ function HomeContent() {
     (item: any): HomeMenuItem => ({
       id: item.id.toString(),
       name: item.name,
-      description: item.description || "Menu andalan kami.",
+      description: item.description || "Menu andalan.",
       price: item.price,
       originalPrice: item.original_price || 0,
       rating: item.rating_avg || 5.0,
@@ -418,7 +414,6 @@ function HomeContent() {
     }
   }, [formatMenuItem]);
 
-  // Effects
   useEffect(() => {
     const h = new Date().getHours();
     setGreeting(
@@ -431,7 +426,7 @@ function HomeContent() {
             : "Selamat Malam 🌙",
     );
 
-    // OPTIMASI SCROLL (RequestAnimationFrame)
+    // Throttle Scroll Event
     let ticking = false;
     const handleScroll = () => {
       if (!ticking) {
@@ -449,11 +444,10 @@ function HomeContent() {
       5000,
     );
 
-    fetchData(); // Trigger Revalidate
+    fetchData();
 
-    // REALTIME PROMO SYNC
     const promoSub = supabase
-      .channel("home-promos-final-v3")
+      .channel("home-promos-final-v4")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "promos" },
@@ -484,7 +478,7 @@ function HomeContent() {
     };
   }, [fetchData]);
 
-  // Table Logic
+  // QR Logic
   useEffect(() => {
     const tableId = searchParams.get("table");
     const tableToken = searchParams.get("token");
@@ -542,7 +536,7 @@ function HomeContent() {
     }
   };
 
-  // --- CAROUSEL (OPTIMIZED) ---
+  // --- CAROUSEL (Fix Scroll Blocking) ---
   const SectionCarousel = ({
     title,
     items,
@@ -590,10 +584,11 @@ function HomeContent() {
             <ChevronRight size={20} />
           </button>
         </div>
-        {/* Added touch-pan-x for smoother mobile scrolling */}
+
+        {/* HAPUS touch-pan-x AGAR TIDAK BLOCK VERTICAL SCROLL */}
         <div
           ref={scrollRef}
-          className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide snap-x snap-mandatory transform-gpu touch-pan-x"
+          className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide snap-x snap-mandatory transform-gpu"
         >
           {isInitialLoading && items.length === 0 ? (
             Array.from({ length: 3 }).map((_, i) => (
@@ -649,389 +644,410 @@ function HomeContent() {
           }),
         }}
       />
-
-      {/* HEADER & HERO */}
-      {isTableValidating ? (
-        <div className="fixed top-20 left-4 right-4 z-50 bg-black/80 backdrop-blur-xl p-4 rounded-2xl border border-orange-500/50 flex items-center gap-3 animate-in slide-in-from-top-5 shadow-2xl">
-          <Loader2 className="animate-spin text-orange-500" size={20} />
-          <p className="text-white text-sm font-bold">Verifikasi Meja...</p>
-        </div>
-      ) : (
-        activeTable && (
-          <div className="fixed top-16 left-4 right-4 z-40 animate-in slide-in-from-top-5 duration-500">
-            <div className="bg-zinc-900/90 backdrop-blur-md border border-emerald-500/30 p-3 rounded-2xl shadow-2xl flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="bg-emerald-500/20 p-2.5 rounded-xl border border-emerald-500/20">
-                  <QrCode className="text-emerald-400" size={20} />
-                </div>
-                <div>
-                  <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider mb-0.5 flex items-center gap-1">
-                    <CheckCircle2 size={10} /> TERHUBUNG
-                  </p>
-                  <p className="text-white font-black text-sm">
-                    {activeTable.number}{" "}
-                    <span className="text-zinc-500 font-normal text-[10px]">
-                      ({activeTable.section})
-                    </span>
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  if (confirm("Keluar meja?")) {
-                    setActiveTable(null);
-                    sessionStorage.removeItem("active_table_session");
-                  }
-                }}
-                className="bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 p-2 rounded-full transition-colors"
-              >
-                <X size={16} />
-              </button>
-            </div>
+      {/* Main Wrapper untuk menjamin scrollable area */}
+      <div className="min-h-screen w-full pb-32 space-y-2">
+        {/* HEADER & NOTIFICATIONS */}
+        {isTableValidating ? (
+          <div className="fixed top-20 left-4 right-4 z-50 bg-black/80 backdrop-blur-xl p-4 rounded-2xl border border-orange-500/50 flex items-center gap-3 animate-in slide-in-from-top-5 shadow-2xl">
+            <Loader2 className="animate-spin text-orange-500" size={20} />
+            <p className="text-white text-sm font-bold">Verifikasi Meja...</p>
           </div>
-        )
-      )}
-
-      <section
-        ref={topRef}
-        className="relative h-[340px] w-full overflow-hidden bg-zinc-900"
-      >
-        {HERO_IMAGES.map((img, idx) => (
-          <div
-            key={idx}
-            className={`absolute inset-0 transition-opacity duration-1000 ease-in-out ${idx === heroIndex ? "opacity-100" : "opacity-0"}`}
-          >
-            <Image
-              src={img}
-              alt="Hero"
-              fill
-              className="object-cover"
-              priority={idx === 0}
-              sizes="100vw"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/40 to-transparent" />
-          </div>
-        ))}
-        <div className="absolute bottom-0 left-0 w-full p-6 pt-12 z-10">
-          <div className="flex justify-between items-start mb-4">
-            <div className="flex gap-2">
-              <div
-                className={`px-3 py-1.5 rounded-full flex items-center gap-2 border backdrop-blur-md transition-colors ${storeInfo.isOpenNow ? "bg-emerald-500/20 border-emerald-500/30 text-emerald-400" : "bg-red-500/20 border-red-500/30 text-red-400"}`}
-              >
-                <span className="relative flex h-2 w-2">
-                  <span
-                    className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${storeInfo.isOpenNow ? "bg-emerald-400" : "bg-red-400"}`}
-                  ></span>
-                  <span
-                    className={`relative inline-flex rounded-full h-2 w-2 ${storeInfo.isOpenNow ? "bg-emerald-500" : "bg-red-500"}`}
-                  ></span>
-                </span>
-                <span className="text-[10px] font-bold uppercase tracking-wider">
-                  {storeInfo.isOpenNow ? "Buka" : "Tutup"}
-                </span>
-              </div>
-              <div className="px-3 py-1.5 rounded-full flex items-center gap-1.5 border border-yellow-500/30 bg-yellow-500/10 text-yellow-400 backdrop-blur-md">
-                <Star size={12} className="fill-yellow-400" />
-                <span className="text-[10px] font-bold">
-                  {storeInfo.ratingAvg}
-                </span>
+        ) : (
+          activeTable && (
+            <div className="fixed top-16 left-4 right-4 z-40 animate-in slide-in-from-top-5 duration-500">
+              <div className="bg-zinc-900/90 backdrop-blur-md border border-emerald-500/30 p-3 rounded-2xl shadow-2xl flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="bg-emerald-500/20 p-2.5 rounded-xl border border-emerald-500/20">
+                    <QrCode className="text-emerald-400" size={20} />
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider mb-0.5 flex items-center gap-1">
+                      <CheckCircle2 size={10} /> TERHUBUNG
+                    </p>
+                    <p className="text-white font-black text-sm">
+                      {activeTable.number}{" "}
+                      <span className="text-zinc-500 font-normal text-[10px]">
+                        ({activeTable.section})
+                      </span>
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    if (confirm("Keluar meja?")) {
+                      setActiveTable(null);
+                      sessionStorage.removeItem("active_table_session");
+                    }
+                  }}
+                  className="bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 p-2 rounded-full transition-colors"
+                >
+                  <X size={16} />
+                </button>
               </div>
             </div>
-            {storeInfo.open_hour && (
-              <div className="text-[10px] text-zinc-300 bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 font-medium">
-                {storeInfo.open_hour.slice(0, 5)} -{" "}
-                {storeInfo.close_hour?.slice(0, 5)}
-              </div>
-            )}
-          </div>
-          <div className="mb-1">
-            <span className="text-orange-400 text-xs font-bold tracking-wider uppercase">
-              {greeting}, Kak! 👋
-            </span>
-          </div>
-          <h1 className="text-4xl font-extrabold text-white mb-2 leading-tight tracking-tight drop-shadow-2xl">
-            {storeInfo.name}
-          </h1>
-          <p className="text-zinc-300 text-xs flex items-center gap-1.5 font-medium opacity-90">
-            <MapPin size={12} className="text-orange-500" /> {storeInfo.address}
-          </p>
-        </div>
-      </section>
+          )
+        )}
 
-      <div className="bg-zinc-900 border-b border-white/5 h-10 flex items-center relative overflow-hidden">
-        <div className="h-full bg-orange-500 px-3 flex items-center justify-center z-10 shadow-lg relative">
-          <Megaphone size={16} className="text-white animate-pulse" />
-        </div>
-        <div className="flex-1 overflow-hidden relative h-full flex items-center">
-          <div className="animate-marquee-smooth flex items-center">
-            {[1, 2, 3, 4].map((i) => (
-              <span
-                key={i}
-                className="text-xs font-medium text-orange-200 mx-8 flex items-center gap-2 whitespace-nowrap"
-              >
-                📢 {storeInfo.running_text}
+        {/* HERO SECTION */}
+        <section
+          ref={topRef}
+          className="relative h-[340px] w-full overflow-hidden bg-zinc-900"
+        >
+          {HERO_IMAGES.map((img, idx) => (
+            <div
+              key={idx}
+              className={`absolute inset-0 transition-opacity duration-1000 ease-in-out ${idx === heroIndex ? "opacity-100" : "opacity-0"}`}
+            >
+              <Image
+                src={img}
+                alt="Hero"
+                fill
+                className="object-cover"
+                priority={idx === 0}
+                sizes="100vw"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/40 to-transparent" />
+            </div>
+          ))}
+          <div className="absolute bottom-0 left-0 w-full p-6 pt-12 z-10">
+            <div className="flex justify-between items-start mb-4">
+              <div className="flex gap-2">
+                <div
+                  className={`px-3 py-1.5 rounded-full flex items-center gap-2 border backdrop-blur-md transition-colors ${storeInfo.isOpenNow ? "bg-emerald-500/20 border-emerald-500/30 text-emerald-400" : "bg-red-500/20 border-red-500/30 text-red-400"}`}
+                >
+                  <span className="relative flex h-2 w-2">
+                    <span
+                      className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${storeInfo.isOpenNow ? "bg-emerald-400" : "bg-red-400"}`}
+                    ></span>
+                    <span
+                      className={`relative inline-flex rounded-full h-2 w-2 ${storeInfo.isOpenNow ? "bg-emerald-500" : "bg-red-500"}`}
+                    ></span>
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider">
+                    {storeInfo.isOpenNow ? "Buka" : "Tutup"}
+                  </span>
+                </div>
+                <div className="px-3 py-1.5 rounded-full flex items-center gap-1.5 border border-yellow-500/30 bg-yellow-500/10 text-yellow-400 backdrop-blur-md">
+                  <Star size={12} className="fill-yellow-400" />
+                  <span className="text-[10px] font-bold">
+                    {storeInfo.ratingAvg}
+                  </span>
+                </div>
+              </div>
+              {storeInfo.open_hour && (
+                <div className="text-[10px] text-zinc-300 bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 font-medium">
+                  {storeInfo.open_hour.slice(0, 5)} -{" "}
+                  {storeInfo.close_hour?.slice(0, 5)}
+                </div>
+              )}
+            </div>
+            <div className="mb-1">
+              <span className="text-orange-400 text-xs font-bold tracking-wider uppercase">
+                {greeting}, Kak! 👋
               </span>
+            </div>
+            <h1 className="text-4xl font-extrabold text-white mb-2 leading-tight tracking-tight drop-shadow-2xl">
+              {storeInfo.name}
+            </h1>
+            <p className="text-zinc-300 text-xs flex items-center gap-1.5 font-medium opacity-90">
+              <MapPin size={12} className="text-orange-500" />{" "}
+              {storeInfo.address}
+            </p>
+          </div>
+        </section>
+
+        {/* RUNNING TEXT */}
+        <div className="bg-zinc-900 border-b border-white/5 h-10 flex items-center relative overflow-hidden">
+          <div className="h-full bg-orange-500 px-3 flex items-center justify-center z-10 shadow-lg relative">
+            <Megaphone size={16} className="text-white animate-pulse" />
+          </div>
+          <div className="flex-1 overflow-hidden relative h-full flex items-center">
+            <div className="animate-marquee-smooth flex items-center">
+              {[1, 2, 3, 4].map((i) => (
+                <span
+                  key={i}
+                  className="text-xs font-medium text-orange-200 mx-8 flex items-center gap-2 whitespace-nowrap"
+                >
+                  📢 {storeInfo.running_text}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* TRUST STATS */}
+        <div className="grid grid-cols-3 gap-2 px-5 py-4 border-b border-white/5 bg-zinc-900/20">
+          {[
+            { l: "100% Halal", i: Medal },
+            { l: "Murah Meriah", i: ThumbsUp },
+            { l: "Free WiFi", i: Wifi },
+          ].map((s, i) => (
+            <div
+              key={i}
+              className="flex flex-col items-center gap-1 text-center"
+            >
+              <div className="p-2 bg-zinc-900 rounded-full text-orange-500 border border-zinc-800 shadow-md">
+                <s.i size={16} />
+              </div>
+              <span className="text-[10px] text-zinc-400 font-medium">
+                {s.l}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {/* CATEGORIES */}
+        <div className="pt-6 pb-2 px-5">
+          <div className="flex justify-between items-center mb-3">
+            <h3 className="text-white font-bold text-sm">Mau makan apa? 😋</h3>
+          </div>
+          <div className="flex gap-5 overflow-x-auto pb-4 scrollbar-hide">
+            {[
+              {
+                name: "Satean",
+                icon: Flame,
+                color: "from-orange-400 to-red-600",
+              },
+              {
+                name: "Makanan",
+                icon: Utensils,
+                color: "from-blue-400 to-indigo-600",
+              },
+              {
+                name: "Minuman",
+                icon: Coffee,
+                color: "from-emerald-400 to-teal-600",
+              },
+              {
+                name: "Cemilan",
+                icon: Cookie,
+                color: "from-pink-400 to-purple-600",
+              },
+            ].map((cat, i) => (
+              <Link
+                href="/menu"
+                key={i}
+                className="flex flex-col items-center gap-2 group min-w-[64px]"
+              >
+                <div
+                  className={`p-[2px] rounded-full bg-gradient-to-tr ${cat.color} group-hover:scale-105 transition-transform`}
+                >
+                  <div className="bg-zinc-950 p-3.5 rounded-full border-2 border-zinc-950 shadow-sm">
+                    <cat.icon size={22} className="text-white" />
+                  </div>
+                </div>
+                <span className="text-[10px] font-medium text-zinc-400 group-hover:text-white transition-colors">
+                  {cat.name}
+                </span>
+              </Link>
             ))}
           </div>
         </div>
-      </div>
 
-      <div className="grid grid-cols-3 gap-2 px-5 py-4 border-b border-white/5 bg-zinc-900/20">
-        {[
-          { l: "100% Halal", i: Medal },
-          { l: "Murah Meriah", i: ThumbsUp },
-          { l: "Free WiFi", i: Wifi },
-        ].map((s, i) => (
-          <div key={i} className="flex flex-col items-center gap-1 text-center">
-            <div className="p-2 bg-zinc-900 rounded-full text-orange-500 border border-zinc-800 shadow-md">
-              <s.i size={16} />
+        {/* PROMO CAROUSEL (Fix Scroll: Removed touch-pan-x) */}
+        {data.promos.length > 0 && (
+          <div className="px-5 pb-6 border-b border-white/5">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-white font-bold text-sm flex items-center gap-2">
+                <TicketPercent size={16} className="text-pink-500" /> Promo
+                Spesial
+              </h3>
             </div>
-            <span className="text-[10px] text-zinc-400 font-medium">{s.l}</span>
+            <div className="flex overflow-x-auto gap-3 scrollbar-hide snap-x snap-mandatory transform-gpu">
+              {data.promos.map((promo, index) => (
+                <PromoCard key={promo.id} promo={promo} index={index} />
+              ))}
+            </div>
           </div>
-        ))}
-      </div>
+        )}
 
-      <div className="pt-6 pb-2 px-5">
-        <div className="flex justify-between items-center mb-3">
-          <h3 className="text-white font-bold text-sm">Mau makan apa? 😋</h3>
-        </div>
-        <div className="flex gap-5 overflow-x-auto pb-4 scrollbar-hide">
-          {[
-            {
-              name: "Satean",
-              icon: Flame,
-              color: "from-orange-400 to-red-600",
-            },
-            {
-              name: "Makanan",
-              icon: Utensils,
-              color: "from-blue-400 to-indigo-600",
-            },
-            {
-              name: "Minuman",
-              icon: Coffee,
-              color: "from-emerald-400 to-teal-600",
-            },
-            {
-              name: "Cemilan",
-              icon: Cookie,
-              color: "from-pink-400 to-purple-600",
-            },
-          ].map((cat, i) => (
+        {/* MOOD SELECTOR */}
+        <section className="px-5 py-4">
+          <h3 className="text-white font-bold text-sm mb-3 flex items-center gap-2">
+            <Smile size={16} className="text-yellow-400" /> Lagi pengen apa?
+          </h3>
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              {
+                l: "Pedas Nampol 🔥",
+                r: pedasRef,
+                c: "text-red-400 bg-red-500/10 border-red-500/20",
+              },
+              {
+                l: "Seger Dingin 🧊",
+                r: segarRef,
+                c: "text-cyan-400 bg-cyan-500/10 border-cyan-500/20",
+              },
+              {
+                l: "Kenyang Pol 🍚",
+                r: kenyangRef,
+                c: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+              },
+              {
+                l: "Manis & Cemilan 🍫",
+                r: cemilanRef,
+                c: "text-pink-400 bg-pink-500/10 border-pink-500/20",
+              },
+            ].map((m, i) => (
+              <button
+                key={i}
+                onClick={() => scrollToRef(m.r as any)}
+                className={`p-3 rounded-xl border ${m.c} text-xs font-bold active:scale-95 transition-transform`}
+              >
+                {m.l}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* RECOMMENDED */}
+        <section className="px-5 pb-6">
+          <div className="flex items-end justify-between mb-4 border-l-4 border-orange-500 pl-3">
+            <div>
+              <h2 className="text-lg font-bold text-white">Paling Laris 🔥</h2>
+              <p className="text-[10px] text-zinc-500">Favorit warga lokal</p>
+            </div>
             <Link
               href="/menu"
-              key={i}
-              className="flex flex-col items-center gap-2 group min-w-[64px]"
+              className="text-[10px] text-orange-500 font-bold hover:underline"
             >
-              <div
-                className={`p-[2px] rounded-full bg-gradient-to-tr ${cat.color} group-hover:scale-105 transition-transform`}
-              >
-                <div className="bg-zinc-950 p-3.5 rounded-full border-2 border-zinc-950 shadow-sm">
-                  <cat.icon size={22} className="text-white" />
-                </div>
-              </div>
-              <span className="text-[10px] font-medium text-zinc-400 group-hover:text-white transition-colors">
-                {cat.name}
-              </span>
+              Lihat Semua
             </Link>
-          ))}
-        </div>
-      </div>
-
-      {data.promos.length > 0 && (
-        <div className="px-5 pb-6 border-b border-white/5">
-          <div className="flex justify-between items-center mb-3">
-            <h3 className="text-white font-bold text-sm flex items-center gap-2">
-              <TicketPercent size={16} className="text-pink-500" /> Promo
-              Spesial
-            </h3>
           </div>
-          {/* Added touch-pan-x for smooth mobile scroll */}
-          <div className="flex overflow-x-auto gap-3 scrollbar-hide snap-x snap-mandatory transform-gpu touch-pan-x">
-            {data.promos.map((promo, index) => (
-              <PromoCard key={promo.id} promo={promo} index={index} />
-            ))}
+          <div className="space-y-3">
+            {isInitialLoading && data.recommendedItems.length === 0
+              ? Array.from({ length: 3 }).map((_, i) => (
+                  <Skeleton key={i} className="h-24 rounded-xl bg-zinc-800" />
+                ))
+              : data.recommendedItems.map((p, i) => (
+                  <HomeProductCard
+                    key={p.id}
+                    product={p}
+                    index={i}
+                    isHorizontal={true}
+                    showLove={false}
+                    onClick={() => handleProductClick(p)}
+                    onQuickAdd={(e) => handleQuickAdd(e, p)}
+                  />
+                ))}
           </div>
-        </div>
-      )}
+        </section>
 
-      <section className="px-5 py-4">
-        <h3 className="text-white font-bold text-sm mb-3 flex items-center gap-2">
-          <Smile size={16} className="text-yellow-400" /> Lagi pengen apa?
-        </h3>
-        <div className="grid grid-cols-2 gap-2">
-          {[
-            {
-              l: "Pedas Nampol 🔥",
-              r: pedasRef,
-              c: "text-red-400 bg-red-500/10 border-red-500/20",
-            },
-            {
-              l: "Seger Dingin 🧊",
-              r: segarRef,
-              c: "text-cyan-400 bg-cyan-500/10 border-cyan-500/20",
-            },
-            {
-              l: "Kenyang Pol 🍚",
-              r: kenyangRef,
-              c: "text-amber-400 bg-amber-500/10 border-amber-500/20",
-            },
-            {
-              l: "Manis & Cemilan 🍫",
-              r: cemilanRef,
-              c: "text-pink-400 bg-pink-500/10 border-pink-500/20",
-            },
-          ].map((m, i) => (
-            <button
-              key={i}
-              onClick={() => scrollToRef(m.r as any)}
-              className={`p-3 rounded-xl border ${m.c} text-xs font-bold active:scale-95 transition-transform`}
-            >
-              {m.l}
-            </button>
-          ))}
-        </div>
-      </section>
+        {/* CAROUSELS */}
+        <SectionCarousel
+          title="Baru Mateng ♨️"
+          items={data.newItems}
+          linkQuery="baru"
+        />
+        <SectionCarousel
+          title="Yang Pedas-Pedas 🌶️"
+          items={data.pedasItems}
+          linkQuery="pedas"
+          refObj={pedasRef}
+        />
+        <SectionCarousel
+          title="Pelepas Dahaga 🍹"
+          items={data.segarItems}
+          linkQuery="es"
+          refObj={segarRef}
+        />
+        <SectionCarousel
+          title="Nasi & Berat 🍚"
+          items={data.kenyangItems}
+          linkQuery="nasi"
+          refObj={kenyangRef}
+        />
+        <SectionCarousel
+          title="Cemilan 🍢"
+          items={data.cemilanItems}
+          linkQuery="cemilan"
+          refObj={cemilanRef}
+        />
 
-      <section className="px-5 pb-6">
-        <div className="flex items-end justify-between mb-4 border-l-4 border-orange-500 pl-3">
-          <div>
-            <h2 className="text-lg font-bold text-white">Paling Laris 🔥</h2>
-            <p className="text-[10px] text-zinc-500">Favorit warga lokal</p>
-          </div>
-          <Link
-            href="/menu"
-            className="text-[10px] text-orange-500 font-bold hover:underline"
-          >
-            Lihat Semua
-          </Link>
-        </div>
-        <div className="space-y-3">
-          {isInitialLoading && data.recommendedItems.length === 0
-            ? Array.from({ length: 3 }).map((_, i) => (
-                <Skeleton key={i} className="h-24 rounded-xl bg-zinc-800" />
-              ))
-            : data.recommendedItems.map((p, i) => (
-                <HomeProductCard
-                  key={p.id}
-                  product={p}
-                  index={i}
-                  isHorizontal={true}
-                  showLove={false}
-                  onClick={() => handleProductClick(p)}
-                  onQuickAdd={(e) => handleQuickAdd(e, p)}
-                />
-              ))}
-        </div>
-      </section>
-
-      <SectionCarousel
-        title="Baru Mateng ♨️"
-        items={data.newItems}
-        linkQuery="baru"
-      />
-      <SectionCarousel
-        title="Yang Pedas-Pedas 🌶️"
-        items={data.pedasItems}
-        linkQuery="pedas"
-        refObj={pedasRef}
-      />
-      <SectionCarousel
-        title="Pelepas Dahaga 🍹"
-        items={data.segarItems}
-        linkQuery="es"
-        refObj={segarRef}
-      />
-      <SectionCarousel
-        title="Nasi & Berat 🍚"
-        items={data.kenyangItems}
-        linkQuery="nasi"
-        refObj={kenyangRef}
-      />
-      <SectionCarousel
-        title="Cemilan 🍢"
-        items={data.cemilanItems}
-        linkQuery="cemilan"
-        refObj={cemilanRef}
-      />
-      {/* --- NEWSLETTER (REDESIGNED) --- */}
-      <section className="px-5 py-8 pb-32">
-        <div className="relative overflow-hidden rounded-3xl p-[1px] bg-gradient-to-br from-orange-500 via-pink-500 to-purple-600 shadow-2xl">
-          <div className="bg-zinc-950 rounded-[23px] p-6 text-center relative overflow-hidden h-full">
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-32 bg-orange-500/20 rounded-full blur-3xl -mt-16 pointer-events-none" />
-            <div className="relative z-10 flex flex-col items-center">
-              <div className="w-12 h-12 bg-gradient-to-tr from-orange-500 to-pink-500 rounded-full flex items-center justify-center mb-3 shadow-lg shadow-orange-500/20 text-white">
-                <Mail size={20} />
-              </div>
-              <h3 className="text-lg font-bold text-white mb-1">
-                Dapat Promo Mingguan?
+        {/* FAQ */}
+        <section className="px-5 py-8 border-t border-white/5 bg-zinc-900/30">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="bg-gradient-to-tr from-orange-600 to-orange-400 p-2 rounded-lg text-white shadow-lg shadow-orange-500/20">
+              <HelpCircle size={18} />
+            </div>
+            <div>
+              <h3 className="text-white font-bold text-sm">
+                Sering Ditanyakan
               </h3>
-              <p className="text-xs text-zinc-400 mb-4 px-2">
-                Gabung newsletter kami buat dapetin kode voucher rahasia & info
-                menu baru!
+              <p className="text-[10px] text-zinc-500">
+                Info seputar angkringan
               </p>
-              <div className="flex w-full gap-2 pl-1 bg-zinc-900 border border-zinc-800 rounded-2xl p-1.5 focus-within:border-orange-500/50 transition-colors">
-                <Input
-                  placeholder="Email kamu..."
-                  className="bg-transparent border-none text-xs h-9 rounded-xl pl-2 focus-visible:ring-0 text-white placeholder:text-zinc-600"
-                />
-                <Button
-                  size="icon"
-                  className="bg-orange-600 hover:bg-orange-500 h-9 w-9 rounded-xl shadow-lg shrink-0"
-                >
-                  <Send size={16} />
-                </Button>
+            </div>
+          </div>
+          <Accordion type="single" collapsible className="w-full space-y-2">
+            {[
+              {
+                q: "Jam berapa buka?",
+                a: `${storeInfo.open_hour?.slice(0, 5) || "17:00"} sampai ${storeInfo.close_hour?.slice(0, 5) || "Habis"} kak.`,
+              },
+              {
+                q: "Apa semua menu halal?",
+                a: "100% Halal kak. Kami tidak menggunakan bahan non-halal.",
+              },
+              {
+                q: "Ada WiFi?",
+                a: "Ada dong! WiFi kencang gratis untuk pelanggan.",
+              },
+              {
+                q: "Lokasi tepatnya dimana?",
+                a: `${storeInfo.address} (Depan Teras Kaca).`,
+              },
+            ].map((faq, i) => (
+              <AccordionItem
+                key={i}
+                value={`item-${i}`}
+                className="border border-white/5 bg-zinc-900/60 rounded-xl px-4 data-[state=open]:bg-zinc-800/80 data-[state=open]:border-orange-500/30 transition-all overflow-hidden"
+              >
+                <AccordionTrigger className="text-xs font-bold text-zinc-200 hover:no-underline py-3 group">
+                  <span className="flex-1 text-left">{faq.q}</span>
+                </AccordionTrigger>
+                <AccordionContent className="text-[11px] text-zinc-400 pb-4 leading-relaxed border-t border-white/5 pt-2 mt-1">
+                  {faq.a}
+                </AccordionContent>
+              </AccordionItem>
+            ))}
+          </Accordion>
+        </section>
+
+        {/* NEWSLETTER */}
+        <section className="px-5 py-8">
+          <div className="relative overflow-hidden rounded-3xl p-[1px] bg-gradient-to-br from-orange-500 via-pink-500 to-purple-600 shadow-2xl">
+            <div className="bg-zinc-950 rounded-[23px] p-6 text-center relative overflow-hidden h-full">
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-32 bg-orange-500/20 rounded-full blur-3xl -mt-16 pointer-events-none" />
+              <div className="relative z-10 flex flex-col items-center">
+                <div className="w-12 h-12 bg-gradient-to-tr from-orange-500 to-pink-500 rounded-full flex items-center justify-center mb-3 shadow-lg shadow-orange-500/20 text-white">
+                  <Mail size={20} />
+                </div>
+                <h3 className="text-lg font-bold text-white mb-1">
+                  Dapat Promo Mingguan?
+                </h3>
+                <p className="text-xs text-zinc-400 mb-4 px-2">
+                  Gabung newsletter kami buat dapetin kode voucher rahasia &
+                  info menu baru!
+                </p>
+                <div className="flex w-full gap-2 pl-1 bg-zinc-900 border border-zinc-800 rounded-2xl p-1.5 focus-within:border-orange-500/50 transition-colors">
+                  <Input
+                    placeholder="Email kamu..."
+                    className="bg-transparent border-none text-xs h-9 rounded-xl pl-2 focus-visible:ring-0 text-white placeholder:text-zinc-600"
+                  />
+                  <Button
+                    size="icon"
+                    className="bg-orange-600 hover:bg-orange-500 h-9 w-9 rounded-xl shadow-lg shrink-0"
+                  >
+                    <Send size={16} />
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      </section>
-      {/* --- FAQ SECTION (MODERN GLASS) --- */}
-      <section className="px-5 py-8 border-t border-white/5 bg-zinc-900/30">
-        <div className="flex items-center gap-2 mb-4">
-          <div className="bg-gradient-to-tr from-orange-600 to-orange-400 p-2 rounded-lg text-white shadow-lg shadow-orange-500/20">
-            <HelpCircle size={18} />
-          </div>
-          <div>
-            <h3 className="text-white font-bold text-sm">Sering Ditanyakan</h3>
-            <p className="text-[10px] text-zinc-500">Info seputar angkringan</p>
-          </div>
-        </div>
-        <Accordion type="single" collapsible className="w-full space-y-2">
-          {[
-            {
-              q: "Jam berapa buka?",
-              a: `${storeInfo.open_hour?.slice(0, 5) || "17:00"} sampai ${storeInfo.close_hour?.slice(0, 5) || "Habis"} kak.`,
-            },
-            {
-              q: "Apa semua menu halal?",
-              a: "100% Halal kak. Kami tidak menggunakan bahan non-halal.",
-            },
-            {
-              q: "Ada WiFi?",
-              a: "Ada dong! WiFi kencang gratis untuk pelanggan.",
-            },
-            {
-              q: "Lokasi tepatnya dimana?",
-              a: `${storeInfo.address} (Depan Teras Kaca).`,
-            },
-          ].map((faq, i) => (
-            <AccordionItem
-              key={i}
-              value={`item-${i}`}
-              className="border border-white/5 bg-zinc-900/60 rounded-xl px-4 data-[state=open]:bg-zinc-800/80 data-[state=open]:border-orange-500/30 transition-all overflow-hidden"
-            >
-              <AccordionTrigger className="text-xs font-bold text-zinc-200 hover:no-underline py-3 group">
-                <span className="flex-1 text-left">{faq.q}</span>
-              </AccordionTrigger>
-              <AccordionContent className="text-[11px] text-zinc-400 pb-4 leading-relaxed border-t border-white/5 pt-2 mt-1">
-                {faq.a}
-              </AccordionContent>
-            </AccordionItem>
-          ))}
-        </Accordion>
-      </section>
-
+        </section>
+      </div>{" "}
+      {/* END OF SCROLLABLE WRAPPER */}
       <button
         onClick={scrollToTop}
         className={`fixed bottom-24 right-5 z-40 bg-zinc-900 border border-zinc-700 text-white p-2 rounded-full shadow-lg transition-all duration-300 ${showScrollTop ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10 pointer-events-none"}`}
