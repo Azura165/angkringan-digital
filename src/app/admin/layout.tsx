@@ -15,10 +15,12 @@ import {
   X,
   ChefHat,
   Armchair,
+  Users, // Import Icon Users
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { AdminSoundSystem } from "@/components/admin/AdminSoundSystem";
+import { TicketPercent } from "lucide-react";
 
 // Utility Debounce Sederhana (Hemat Resource)
 function useDebounceCallback<T extends (...args: any[]) => void>(
@@ -55,7 +57,7 @@ export default function AdminLayout({
       const lastReadOrder = localStorage.getItem("admin_last_read_orders");
       let orderQuery = supabase
         .from("orders")
-        .select("*", { count: "exact", head: true }) // HEAD request = Ringan banget
+        .select("*", { count: "exact", head: true })
         .eq("status", "pending");
 
       if (lastReadOrder) {
@@ -80,17 +82,14 @@ export default function AdminLayout({
         activeTables: tableCount || 0,
       });
     } catch (e) {
-      // Silent error agar tidak mengganggu UI
       console.error("Badge sync error", e);
     }
   }, []);
 
-  // Debounced Fetcher (Anti-Spam Realtime)
   const debouncedFetchCounts = useDebounceCallback(fetchCounts, 1000);
 
   // --- 2. LOGIC RESET & INIT ---
   useEffect(() => {
-    // Reset Badge saat pindah halaman
     if (pathname === "/admin/orders") {
       localStorage.setItem("admin_last_read_orders", new Date().toISOString());
       setCounts((prev) => ({ ...prev, pendingOrders: 0 }));
@@ -104,7 +103,7 @@ export default function AdminLayout({
 
   // --- 3. REALTIME LISTENER (Global) ---
   useEffect(() => {
-    fetchCounts(); // Initial load
+    fetchCounts();
 
     const channel = supabase
       .channel("admin-layout-badges-optimized")
@@ -113,13 +112,12 @@ export default function AdminLayout({
         { event: "*", schema: "public", table: "orders" },
         () => {
           if (window.location.pathname === "/admin/orders") {
-            // Jika sedang dilihat, update timestamp saja, jangan fetch
             localStorage.setItem(
               "admin_last_read_orders",
               new Date().toISOString(),
             );
           } else {
-            debouncedFetchCounts(); // Gunakan versi debounced
+            debouncedFetchCounts();
           }
         },
       )
@@ -170,6 +168,9 @@ export default function AdminLayout({
         badge: counts.pendingOrders > 0 ? counts.pendingOrders : null,
         badgeColor: "bg-red-600 animate-pulse",
       },
+      // MENU BARU: TIM & AKSES
+      { name: "Tim & Akses", href: "/admin/users", icon: Users },
+      { name: "Promo & Diskon", href: "/admin/promos", icon: TicketPercent },
       { name: "Ulasan Pelanggan", href: "/admin/reviews", icon: MessageSquare },
       { name: "Pengaturan Toko", href: "/admin/settings", icon: Settings },
     ],
@@ -180,7 +181,7 @@ export default function AdminLayout({
     <div className="min-h-screen bg-zinc-950 flex font-sans text-zinc-100 selection:bg-orange-500/30 overflow-hidden">
       <AdminSoundSystem />
 
-      {/* --- SIDEBAR (Hardware Accelerated) --- */}
+      {/* --- SIDEBAR --- */}
       <aside
         className={`fixed inset-y-0 left-0 z-50 w-64 bg-zinc-900 border-r border-white/5 
         transform-gpu transition-transform duration-300 ease-in-out md:translate-x-0 will-change-transform backface-hidden
@@ -255,8 +256,7 @@ export default function AdminLayout({
         </div>
       </aside>
 
-      {/* --- OVERLAY (Mobile Optimized) --- */}
-      {/* Menggunakan logic render conditional agar DOM lebih ringan saat tertutup */}
+      {/* --- OVERLAY --- */}
       {isSidebarOpen && (
         <div
           onClick={() => setIsSidebarOpen(false)}
