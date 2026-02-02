@@ -23,13 +23,11 @@ import {
   Star,
   QrCode,
   CheckCircle2,
-  AlertCircle,
   X,
   Loader2,
   TicketPercent,
   Copy,
   Send,
-  ChevronDown,
 } from "lucide-react";
 import Link from "next/link";
 import {
@@ -66,7 +64,7 @@ const ProductDetailModal = dynamic(
   { ssr: false, loading: () => null },
 );
 
-// --- CSS GLOBAL ---
+// --- CSS GLOBAL & OPTIMASI ---
 const GLOBAL_STYLES = `
   @keyframes marquee-linear {
     0% { transform: translate3d(0, 0, 0); }
@@ -85,9 +83,13 @@ const GLOBAL_STYLES = `
       -ms-overflow-style: none;
       scrollbar-width: none;
   }
+  /* Optimasi Scroll Mobile */
+  .touch-pan-x {
+    touch-action: pan-x;
+  }
 `;
 
-// --- TYPES ---
+// --- TIPE DATA ---
 interface HomeMenuItem extends MenuItem {
   description: string;
   rating: number;
@@ -142,8 +144,8 @@ const PROMO_STYLES = [
   "bg-gradient-to-br from-orange-500 via-amber-500 to-yellow-500",
 ];
 
-const CACHE_KEY_STORE = "store_config_cache_v7";
-const CACHE_KEY_HOME_DATA = "home_data_cache_v10";
+const CACHE_KEY_STORE = "store_config_cache_v8";
+const CACHE_KEY_HOME_DATA = "home_data_cache_v11";
 
 // --- HELPER ---
 const formatRupiahCompact = (num: number) => {
@@ -167,7 +169,7 @@ const loadCache = <T,>(key: string, fallback: T): T => {
   }
 };
 
-// --- SUB-COMPONENT: PROMO CARD ---
+// --- SUB-COMPONENT: PROMO CARD (OPTIMIZED) ---
 const PromoCard = memo(({ promo, index }: { promo: Promo; index: number }) => {
   const bgStyle = PROMO_STYLES[index % PROMO_STYLES.length];
 
@@ -183,14 +185,16 @@ const PromoCard = memo(({ promo, index }: { promo: Promo; index: number }) => {
   return (
     <div
       onClick={handleCopy}
-      className={`snap-center min-w-[280px] h-[110px] rounded-2xl relative overflow-hidden shadow-lg cursor-pointer active:scale-[0.98] transition-all duration-300 group ${bgStyle}`}
+      className={`snap-center min-w-[280px] h-[110px] rounded-2xl relative overflow-hidden shadow-lg cursor-pointer active:scale-[0.98] transition-transform duration-200 group ${bgStyle} transform-gpu`}
     >
+      {/* Pattern Overlay - Static Image is lighter than CSS Gradient calculations */}
       <div className="absolute inset-0 opacity-20 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] mix-blend-overlay pointer-events-none" />
+
       <div className="relative z-10 h-full flex flex-col justify-between p-4">
         <div className="flex justify-between items-start">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="bg-white/20 backdrop-blur-md px-2 py-0.5 rounded-md text-[10px] font-mono font-bold text-white border border-white/20 flex items-center gap-1 shadow-sm">
+              <span className="bg-white/20 backdrop-blur-sm px-2 py-0.5 rounded-md text-[10px] font-mono font-bold text-white border border-white/20 flex items-center gap-1 shadow-sm">
                 <TicketPercent size={10} /> {promo.code}
               </span>
               {promo.min_purchase > 0 && (
@@ -237,7 +241,7 @@ function HomeContent() {
   const kenyangRef = useRef<HTMLDivElement>(null);
   const cemilanRef = useRef<HTMLDivElement>(null);
 
-  // --- STATE INIT WITH LAZY CACHE (INSTANT LOAD) ---
+  // --- STATE INIT WITH LAZY CACHE ---
   const [data, setData] = useState<HomeDataCache>(() =>
     loadCache<HomeDataCache>(CACHE_KEY_HOME_DATA, {
       recommendedItems: [],
@@ -265,7 +269,6 @@ function HomeContent() {
 
   // UX State
   const [isInitialLoading, setIsInitialLoading] = useState(() => {
-    // If cache exists, we are NOT loading initially
     if (
       typeof window !== "undefined" &&
       sessionStorage.getItem(CACHE_KEY_HOME_DATA)
@@ -289,7 +292,7 @@ function HomeContent() {
   );
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Formatter (Memoized)
+  // Formatter
   const formatMenuItem = useCallback(
     (item: any): HomeMenuItem => ({
       id: item.id.toString(),
@@ -305,7 +308,7 @@ function HomeContent() {
     [],
   );
 
-  // --- FETCH DATA (REVALIDATE) ---
+  // --- FETCH DATA ---
   const fetchData = useCallback(async () => {
     try {
       const LIMIT = 7;
@@ -427,8 +430,20 @@ function HomeContent() {
             ? "Selamat Sore 🌇"
             : "Selamat Malam 🌙",
     );
-    const handleScroll = () => setShowScrollTop(window.scrollY > 300);
+
+    // OPTIMASI SCROLL (RequestAnimationFrame)
+    let ticking = false;
+    const handleScroll = () => {
+      if (!ticking) {
+        window.requestAnimationFrame(() => {
+          setShowScrollTop(window.scrollY > 300);
+          ticking = false;
+        });
+        ticking = true;
+      }
+    };
     window.addEventListener("scroll", handleScroll, { passive: true });
+
     const interval = setInterval(
       () => setHeroIndex((prev) => (prev + 1) % HERO_IMAGES.length),
       5000,
@@ -438,7 +453,7 @@ function HomeContent() {
 
     // REALTIME PROMO SYNC
     const promoSub = supabase
-      .channel("home-promos-final-v2")
+      .channel("home-promos-final-v3")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "promos" },
@@ -527,7 +542,7 @@ function HomeContent() {
     }
   };
 
-  // --- CAROUSEL ---
+  // --- CAROUSEL (OPTIMIZED) ---
   const SectionCarousel = ({
     title,
     items,
@@ -575,9 +590,10 @@ function HomeContent() {
             <ChevronRight size={20} />
           </button>
         </div>
+        {/* Added touch-pan-x for smoother mobile scrolling */}
         <div
           ref={scrollRef}
-          className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide snap-x snap-mandatory transform-gpu"
+          className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide snap-x snap-mandatory transform-gpu touch-pan-x"
         >
           {isInitialLoading && items.length === 0 ? (
             Array.from({ length: 3 }).map((_, i) => (
@@ -830,7 +846,8 @@ function HomeContent() {
               Spesial
             </h3>
           </div>
-          <div className="flex overflow-x-auto gap-3 scrollbar-hide snap-x snap-mandatory transform-gpu">
+          {/* Added touch-pan-x for smooth mobile scroll */}
+          <div className="flex overflow-x-auto gap-3 scrollbar-hide snap-x snap-mandatory transform-gpu touch-pan-x">
             {data.promos.map((promo, index) => (
               <PromoCard key={promo.id} promo={promo} index={index} />
             ))}
